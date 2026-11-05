@@ -10,6 +10,14 @@ if MEDIATEK_SOLUTION
 config MTK_PLATFORM
 	string "MTK platform name"
 
+config MTK_M5NOTE
+	bool "Meizu M5 Note (M1621) board"
+	depends on MACH_MT6755
+	default n
+	help
+	  Select board-specific thermal-zone ordering and other M5 Note
+	  integration behavior for the Meizu M1621.
+
 config ARCH_MTK_PROJECT
 	string "MTK project name"
 

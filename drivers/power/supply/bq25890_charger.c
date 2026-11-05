@@ -17,6 +17,7 @@
 
 #include <linux/module.h>
 #include <linux/i2c.h>
+#include <linux/kernel.h>
 #include <linux/power_supply.h>
 #include <linux/regmap.h>
 #include <linux/types.h>
@@ -32,6 +33,8 @@
 #define BQ25890_IRQ_PIN			"bq25890_irq"
 
 #define BQ25890_ID			3
+#define BQ25892_ID			0
+#define BQ25892_REV			1
 
 enum bq25890_fields {
 	F_EN_HIZ, F_EN_ILIM, F_IILIM,				     /* Reg00 */
@@ -66,6 +69,7 @@ enum bq25890_fields {
 /* initial field values, converted to register values */
 struct bq25890_init_data {
 	u8 ichg;	/* charge current		*/
+	u8 iilim;	/* input current limit		*/
 	u8 vreg;	/* regulation voltage		*/
 	u8 iterm;	/* termination current		*/
 	u8 iprechg;	/* precharge current		*/
@@ -86,6 +90,13 @@ struct bq25890_state {
 	u8 bat_fault;
 };
 
+enum bq25890_temp_guard_state {
+	BQ25890_TEMP_GUARD_UNKNOWN,
+	BQ25890_TEMP_GUARD_OK,
+	BQ25890_TEMP_GUARD_COLD,
+	BQ25890_TEMP_GUARD_HOT,
+};
+
 struct bq25890_device {
 	struct i2c_client *client;
 	struct device *dev;
@@ -104,6 +115,11 @@ struct bq25890_device {
 	struct bq25890_state state;
 
 	struct mutex lock; /* protect state data */
+	struct delayed_work state_work;
+	bool poll_mode;
+	bool m1621_thermal_guard;
+	bool charge_enabled;
+	enum bq25890_temp_guard_state temp_guard_state;
 };
 
 static const struct regmap_range bq25890_readonly_reg_ranges[] = {
@@ -243,6 +259,7 @@ static const struct reg_field bq25890_reg_fields[] = {
 enum bq25890_table_ids {
 	/* range tables */
 	TBL_ICHG,
+	TBL_IILIM,
 	TBL_ITERM,
 	TBL_IPRECHG,
 	TBL_VREG,
@@ -285,7 +302,9 @@ static const union {
 } bq25890_tables[] = {
 	/* range tables */
 	[TBL_ICHG] =	{ .rt = {0,	  5056000, 64000} },	 /* uA */
+	[TBL_IILIM] =	{ .rt = {100000, 3250000, 50000} },	 /* uA */
 	[TBL_ITERM] =	{ .rt = {64000,   1024000, 64000} },	 /* uA */
+	[TBL_IPRECHG] =	{ .rt = {64000,   1024000, 64000} },	 /* uA */
 	[TBL_VREG] =	{ .rt = {3840000, 4608000, 16000} },	 /* uV */
 	[TBL_BATCMP] =	{ .rt = {0,	  140,     20} },	 /* mOhm */
 	[TBL_VCLAMP] =	{ .rt = {0,	  224000,  32000} },	 /* uV */
@@ -379,6 +398,13 @@ static int bq25890_power_supply_get_property(struct power_supply *psy,
 
 	mutex_lock(&bq->lock);
 	state = bq->state;
+	if (psp == POWER_SUPPLY_PROP_STATUS && !bq->charge_enabled) {
+		val->intval = state.online ?
+			POWER_SUPPLY_STATUS_NOT_CHARGING :
+			POWER_SUPPLY_STATUS_DISCHARGING;
+		mutex_unlock(&bq->lock);
+		return 0;
+	}
 	mutex_unlock(&bq->lock);
 
 	switch (psp) {
@@ -509,6 +535,94 @@ static bool bq25890_state_changed(struct bq25890_device *bq,
 		old_state.vsys_status != new_state->vsys_status);
 }
 
+static enum bq25890_temp_guard_state
+bq25890_temp_guard_next(enum bq25890_temp_guard_state state, int temp)
+{
+	switch (state) {
+	case BQ25890_TEMP_GUARD_COLD:
+		if (temp < 60)
+			return BQ25890_TEMP_GUARD_COLD;
+		return temp >= 500 ? BQ25890_TEMP_GUARD_HOT :
+			BQ25890_TEMP_GUARD_OK;
+	case BQ25890_TEMP_GUARD_HOT:
+		if (temp >= 470)
+			return BQ25890_TEMP_GUARD_HOT;
+		return temp < 0 ? BQ25890_TEMP_GUARD_COLD :
+			BQ25890_TEMP_GUARD_OK;
+	case BQ25890_TEMP_GUARD_OK:
+	case BQ25890_TEMP_GUARD_UNKNOWN:
+	default:
+		if (temp < 0)
+			return BQ25890_TEMP_GUARD_COLD;
+		if (temp >= 500)
+			return BQ25890_TEMP_GUARD_HOT;
+		return BQ25890_TEMP_GUARD_OK;
+	}
+}
+
+static int bq25890_m1621_temp_guard(struct bq25890_device *bq, bool online)
+{
+	struct power_supply *battery;
+	union power_supply_propval value;
+	enum bq25890_temp_guard_state old_state, new_state;
+	bool valid = false, enable, changed, charging;
+	int temp = 0, sensor_ret = 0, write_ret = 0;
+
+	if (!bq->m1621_thermal_guard)
+		return 0;
+
+	battery = power_supply_get_by_name("battery");
+	if (!battery) {
+		sensor_ret = -ENODEV;
+	} else {
+		sensor_ret = power_supply_get_property(battery,
+						       POWER_SUPPLY_PROP_TEMP,
+						       &value);
+		if (!sensor_ret && value.intval >= -250 && value.intval <= 650) {
+			temp = value.intval;
+			valid = true;
+		} else if (!sensor_ret) {
+			sensor_ret = -ERANGE;
+		}
+		power_supply_put(battery);
+	}
+
+	mutex_lock(&bq->lock);
+	old_state = bq->temp_guard_state;
+	new_state = valid ? bq25890_temp_guard_next(old_state, temp) : old_state;
+	enable = valid && online && new_state == BQ25890_TEMP_GUARD_OK;
+	changed = bq->charge_enabled != enable;
+	if (changed) {
+		write_ret = bq25890_field_write(bq, F_CHG_CFG, enable);
+		if (!write_ret)
+			bq->charge_enabled = enable;
+	}
+	bq->temp_guard_state = new_state;
+	charging = bq->charge_enabled;
+	mutex_unlock(&bq->lock);
+
+	if (sensor_ret)
+		dev_err_ratelimited(bq->dev,
+				    "M1621 battery temperature unavailable (%d); charging held off\n",
+				    sensor_ret);
+	if (write_ret)
+		dev_err_ratelimited(bq->dev,
+				    "M1621 temperature charge guard: charger update failed (%d), charging remains %s\n",
+				    write_ret, charging ? "enabled" : "disabled");
+	else if (valid && (old_state != new_state || changed))
+		dev_info(bq->dev,
+			 "M1621 temperature charge guard: %s, battery %d.%d C, charging %s\n",
+			 new_state == BQ25890_TEMP_GUARD_COLD ? "cold inhibit" :
+			 new_state == BQ25890_TEMP_GUARD_HOT ? "hot inhibit" :
+			 "temperature valid",
+			 temp / 10, abs(temp % 10),
+			 charging ? "enabled" : "disabled");
+
+	if (changed && !write_ret)
+		power_supply_changed(bq->charger);
+	return write_ret;
+}
+
 static void bq25890_handle_state_change(struct bq25890_device *bq,
 					struct bq25890_state *new_state)
 {
@@ -547,6 +661,7 @@ static irqreturn_t bq25890_irq_handler_thread(int irq, void *private)
 	if (ret < 0)
 		goto handled;
 
+	bq25890_m1621_temp_guard(bq, state.online);
 	if (!bq25890_state_changed(bq, &state))
 		goto handled;
 
@@ -560,6 +675,34 @@ static irqreturn_t bq25890_irq_handler_thread(int irq, void *private)
 
 handled:
 	return IRQ_HANDLED;
+}
+
+static void bq25890_state_work(struct work_struct *work)
+{
+	struct bq25890_device *bq =
+		container_of(to_delayed_work(work), struct bq25890_device,
+			     state_work);
+	struct bq25890_state state;
+	int ret;
+
+	ret = bq25890_get_chip_state(bq, &state);
+	if (ret < 0) {
+		dev_err_ratelimited(bq->dev,
+				    "Error polling charger state: %d\n", ret);
+	} else {
+		bq25890_m1621_temp_guard(bq, state.online);
+		if (bq25890_state_changed(bq, &state)) {
+			bq25890_handle_state_change(bq, &state);
+
+			mutex_lock(&bq->lock);
+			bq->state = state;
+			mutex_unlock(&bq->lock);
+
+			power_supply_changed(bq->charger);
+		}
+	}
+
+	schedule_delayed_work(&bq->state_work, msecs_to_jiffies(2000));
 }
 
 static int bq25890_chip_reset(struct bq25890_device *bq)
@@ -596,6 +739,7 @@ static int bq25890_hw_init(struct bq25890_device *bq)
 		u32 value;
 	} init_data[] = {
 		{F_ICHG,	 bq->init_data.ichg},
+		{F_IILIM,	 bq->init_data.iilim},
 		{F_VREG,	 bq->init_data.vreg},
 		{F_ITERM,	 bq->init_data.iterm},
 		{F_IPRECHG,	 bq->init_data.iprechg},
@@ -636,6 +780,12 @@ static int bq25890_hw_init(struct bq25890_device *bq)
 	mutex_lock(&bq->lock);
 	bq->state = state;
 	mutex_unlock(&bq->lock);
+
+	if (state.online) {
+		ret = bq25890_field_write(bq, F_CONV_START, 1);
+		if (ret < 0)
+			return ret;
+	}
 
 	return 0;
 }
@@ -723,11 +873,13 @@ static int bq25890_irq_probe(struct bq25890_device *bq)
 {
 	struct gpio_desc *irq;
 
-	irq = devm_gpiod_get_index(bq->dev, BQ25890_IRQ_PIN, 0, GPIOD_IN);
+	irq = devm_gpiod_get_optional(bq->dev, BQ25890_IRQ_PIN, GPIOD_IN);
 	if (IS_ERR(irq)) {
-		dev_err(bq->dev, "Could not probe irq pin.\n");
 		return PTR_ERR(irq);
 	}
+
+	if (!irq)
+		return 0;
 
 	return gpiod_to_irq(irq);
 }
@@ -746,9 +898,10 @@ static int bq25890_fw_read_u32_props(struct bq25890_device *bq)
 	} props[] = {
 		/* required properties */
 		{"ti,charge-current", false, TBL_ICHG, &init->ichg},
+		{"ti,input-current-limit", false, TBL_IILIM, &init->iilim},
 		{"ti,battery-regulation-voltage", false, TBL_VREG, &init->vreg},
 		{"ti,termination-current", false, TBL_ITERM, &init->iterm},
-		{"ti,precharge-current", false, TBL_ITERM, &init->iprechg},
+		{"ti,precharge-current", false, TBL_IPRECHG, &init->iprechg},
 		{"ti,minimum-sys-voltage", false, TBL_SYSVMIN, &init->sysvmin},
 		{"ti,boost-voltage", false, TBL_BOOSTV, &init->boostv},
 		{"ti,boost-max-current", false, TBL_BOOSTI, &init->boosti},
@@ -812,6 +965,9 @@ static int bq25890_probe(struct i2c_client *client,
 
 	bq->client = client;
 	bq->dev = dev;
+	bq->m1621_thermal_guard =
+		of_machine_is_compatible("meizu,m1621");
+	bq->temp_guard_state = BQ25890_TEMP_GUARD_UNKNOWN;
 
 	mutex_init(&bq->lock);
 
@@ -840,7 +996,16 @@ static int bq25890_probe(struct i2c_client *client,
 		return bq->chip_id;
 	}
 
-	if (bq->chip_id != BQ25890_ID) {
+	if (bq->chip_id == BQ25892_ID) {
+		ret = bq25890_field_read(bq, F_DEV_REV);
+		if (ret < 0)
+			return ret;
+		if (ret != BQ25892_REV) {
+			dev_err(dev, "Unsupported BQ2589x revision %d\n", ret);
+			return -ENODEV;
+		}
+		dev_info(dev, "Detected BQ25892 (part 0, revision 1)\n");
+	} else if (bq->chip_id != BQ25890_ID) {
 		dev_err(dev, "Chip with ID=%d, not supported!\n", bq->chip_id);
 		return -ENODEV;
 	}
@@ -861,13 +1026,21 @@ static int bq25890_probe(struct i2c_client *client,
 		return ret;
 	}
 
-	if (client->irq <= 0)
+	if (client->irq <= 0) {
 		client->irq = bq25890_irq_probe(bq);
+		if (client->irq < 0) {
+			dev_err(dev, "Failed to get charger IRQ: %d\n",
+				client->irq);
+			return client->irq;
+		}
 
-	if (client->irq < 0) {
-		dev_err(dev, "No irq resource found.\n");
-		return client->irq;
+		if (!client->irq) {
+			bq->poll_mode = true;
+			dev_info(dev, "No IRQ specified; polling charger state\n");
+		}
 	}
+	if (bq->m1621_thermal_guard)
+		bq->poll_mode = true;
 
 	/* OTG reporting */
 	bq->usb_phy = devm_usb_get_phy(dev, USB_PHY_TYPE_USB2);
@@ -877,17 +1050,38 @@ static int bq25890_probe(struct i2c_client *client,
 		usb_register_notifier(bq->usb_phy, &bq->usb_nb);
 	}
 
-	ret = devm_request_threaded_irq(dev, client->irq, NULL,
-					bq25890_irq_handler_thread,
-					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-					BQ25890_IRQ_PIN, bq);
-	if (ret)
-		goto irq_fail;
+	if (client->irq > 0) {
+		ret = devm_request_threaded_irq(dev, client->irq, NULL,
+						bq25890_irq_handler_thread,
+						IRQF_TRIGGER_FALLING |
+						IRQF_ONESHOT,
+						BQ25890_IRQ_PIN, bq);
+		if (ret)
+			goto irq_fail;
+	}
 
 	ret = bq25890_power_supply_init(bq);
 	if (ret < 0) {
 		dev_err(dev, "Failed to register power supply\n");
 		goto irq_fail;
+	}
+
+	ret = bq25890_field_write(bq, F_CHG_CFG,
+				  bq->m1621_thermal_guard ? 0 : 1);
+	if (ret < 0) {
+		dev_err(dev, "Failed to configure charging\n");
+		bq25890_field_write(bq, F_CHG_CFG, 0);
+		power_supply_unregister(bq->charger);
+		goto irq_fail;
+	}
+	bq->charge_enabled = !bq->m1621_thermal_guard;
+	if (bq->m1621_thermal_guard)
+		dev_info(dev, "M1621 charge held off until battery temperature is valid\n");
+
+	if (bq->poll_mode) {
+		INIT_DELAYED_WORK(&bq->state_work, bq25890_state_work);
+		schedule_delayed_work(&bq->state_work,
+				      msecs_to_jiffies(2000));
 	}
 
 	return 0;
@@ -902,6 +1096,9 @@ irq_fail:
 static int bq25890_remove(struct i2c_client *client)
 {
 	struct bq25890_device *bq = i2c_get_clientdata(client);
+
+	if (bq->poll_mode)
+		cancel_delayed_work_sync(&bq->state_work);
 
 	power_supply_unregister(bq->charger);
 
@@ -966,6 +1163,7 @@ MODULE_DEVICE_TABLE(i2c, bq25890_i2c_ids);
 
 static const struct of_device_id bq25890_of_match[] = {
 	{ .compatible = "ti,bq25890", },
+	{ .compatible = "ti,bq25892", },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, bq25890_of_match);

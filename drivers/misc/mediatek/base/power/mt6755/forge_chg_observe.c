@@ -10,6 +10,7 @@
 #include <linux/ktime.h>
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
+#include <linux/platform_device.h>
 #include <linux/power_supply.h>
 #include <linux/ratelimit.h>
 #include <linux/spinlock.h>
@@ -133,7 +134,36 @@ static const struct forge_ocv forge_ocv_l681_id0[] = {
 	{ 100, 3400 },
 };
 
+/* m1621 (M5 Note): stock battery_profile_t2[1], profile ID1 (XINWANGDA-ATL,
+ * the ID stock reports on this phone: "battery_id:1") at 25 C, DOD % : OCV
+ * mV, read from the stock 3.18 kernel image (data at 0x1158ba8, the 16
+ * profile tables t0..t3 x ID0..3 in a row). Rows past DOD 100 are clamped
+ * to 100. The NTC table and the 24 kOhm pull-up of the stock M5 DT equal
+ * the m681 ones above; the battery ID is not read here, ID1 is assumed. */
+static const struct forge_ocv forge_ocv_m1621_id1[] = {
+	{ 0, 4388 }, { 1, 4372 }, { 3, 4358 }, { 4, 4343 }, { 5, 4328 },
+	{ 6, 4314 }, { 8, 4299 }, { 9, 4284 }, { 10, 4269 }, { 11, 4254 },
+	{ 13, 4239 }, { 14, 4224 }, { 15, 4209 }, { 17, 4194 }, { 18, 4180 },
+	{ 19, 4166 }, { 20, 4151 }, { 22, 4137 }, { 23, 4123 }, { 24, 4109 },
+	{ 26, 4095 }, { 28, 4082 }, { 29, 4071 }, { 30, 4058 }, { 32, 4045 },
+	{ 33, 4031 }, { 34, 4017 }, { 35, 4004 }, { 37, 3992 }, { 38, 3981 },
+	{ 39, 3971 }, { 40, 3961 }, { 42, 3949 }, { 43, 3935 }, { 44, 3919 },
+	{ 45, 3903 }, { 47, 3891 }, { 48, 3881 }, { 49, 3872 }, { 51, 3864 },
+	{ 52, 3857 }, { 53, 3850 }, { 54, 3843 }, { 56, 3837 }, { 57, 3831 },
+	{ 58, 3826 }, { 59, 3821 }, { 61, 3815 }, { 62, 3811 }, { 63, 3806 },
+	{ 65, 3802 }, { 66, 3798 }, { 67, 3794 }, { 68, 3791 }, { 70, 3787 },
+	{ 71, 3783 }, { 72, 3780 }, { 73, 3775 }, { 76, 3770 }, { 77, 3765 },
+	{ 78, 3761 }, { 80, 3754 }, { 81, 3750 }, { 82, 3747 }, { 83, 3743 },
+	{ 85, 3738 }, { 86, 3730 }, { 87, 3723 }, { 88, 3717 }, { 90, 3707 },
+	{ 91, 3697 }, { 92, 3694 }, { 94, 3692 }, { 95, 3690 }, { 96, 3689 },
+	{ 97, 3681 }, { 99, 3646 }, { 100, 3585 }, { 100, 3497 }, { 100, 3400 },
+};
+
 static bool forge_bat_l681;	/* board from the DT, set at init */
+static bool forge_bat_m1621;	/* M5 Note DT ("meizu,m1621"), set at init */
+/* the boards with the placeholder and the no-sample 0 % rule below */
+#define forge_bat_ext()	(forge_bat_l681 || forge_bat_m1621)
+#define forge_bat_bname() (forge_bat_m1621 ? "m1621" : "l681")
 /* l681 only: capacity published, until the first valid sample, when the
  * observer registers without one (healthd reads a missing battery as 0 %
  * and BatteryService then shuts down; never 0 on error) */
@@ -271,10 +301,12 @@ static int forge_ntc_temp(int mv, int *ohm, int *dc)
 /* capacity % from the OCV table, linear between rows */
 static int forge_ocv_soc(int mv)
 {
-	const struct forge_ocv *t = forge_bat_l681 ? forge_ocv_l681_id0 :
-						    forge_ocv_id0;
-	int n = forge_bat_l681 ? ARRAY_SIZE(forge_ocv_l681_id0) :
-				 ARRAY_SIZE(forge_ocv_id0);
+	const struct forge_ocv *t = forge_bat_m1621 ? forge_ocv_m1621_id1 :
+				    forge_bat_l681 ? forge_ocv_l681_id0 :
+				    forge_ocv_id0;
+	int n = forge_bat_m1621 ? ARRAY_SIZE(forge_ocv_m1621_id1) :
+		forge_bat_l681 ? ARRAY_SIZE(forge_ocv_l681_id0) :
+		ARRAY_SIZE(forge_ocv_id0);
 	int i, dod;
 
 	if (mv >= t[0].mv)
@@ -567,6 +599,23 @@ void __weak forge_bq_ctrl_init(void)
 {
 }
 
+/* m1621 (M5 Note): the BQ25892 on i2c1 0x6b is run by the mainline
+ * bq25890_charger driver (power_supply "bq25890-charger"); the charge
+ * state comes from there. No SM5414 on this board: none of the m681 0x49
+ * code runs. */
+static int forge_bat_status_m1621(void)
+{
+	struct power_supply *chg = power_supply_get_by_name("bq25890-charger");
+	union power_supply_propval val;
+	int ret;
+
+	if (!chg)
+		return POWER_SUPPLY_STATUS_UNKNOWN;
+	ret = power_supply_get_property(chg, POWER_SUPPLY_PROP_STATUS, &val);
+	power_supply_put(chg);
+	return ret ? POWER_SUPPLY_STATUS_UNKNOWN : val.intval;
+}
+
 /* l681, cable in: no SM5414 on this board */
 static int forge_bat_status_l681(void)
 {
@@ -589,6 +638,8 @@ static int forge_bat_status(int chrdet)
 		return POWER_SUPPLY_STATUS_UNKNOWN;
 	if (forge_bat_l681)
 		return forge_bat_status_l681();
+	if (forge_bat_m1621)
+		return forge_bat_status_m1621();
 	forge_sm5414_poll(forge_bat_pub.vbat_mv);
 	if (forge_chg_ctrl_inhibited())	/* CHGEN off by the charger control */
 		return POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -691,11 +742,42 @@ static const struct power_supply_desc forge_usb_desc = {
 	.no_thermal = true,
 };
 
+/*
+ * The parent of the 'battery' supply: the platform device "battery", so the
+ * supply sits at /sys/devices/platform/battery/power_supply/battery as with
+ * the stock MTK battery driver. Recoveries built for the stock kernel read
+ * the capacity from that fixed path (the M5 Note TWRP 3.3.1 does; the
+ * class link /sys/class/power_supply/battery exists either way). An
+ * existing platform device of that name is used, else one is made.
+ */
+static struct device *forge_bat_parent(void)
+{
+	struct platform_device *pdev;
+	struct device *dev;
+
+	dev = bus_find_device_by_name(&platform_bus_type, NULL, "battery");
+	if (dev) {
+		put_device(dev);	/* a platform device is never freed */
+		pr_notice("[FORGE_M681] battery: parent: existing platform device %s\n",
+			  dev_name(dev));
+		return dev;
+	}
+	pdev = platform_device_register_simple("battery", -1, NULL, 0);
+	if (IS_ERR(pdev)) {
+		pr_err("[FORGE_M681] battery: platform device 'battery' not made: %ld, supply without parent\n",
+		       PTR_ERR(pdev));
+		return NULL;
+	}
+	pr_notice("[FORGE_M681] battery: parent: platform device %s made\n",
+		  dev_name(&pdev->dev));
+	return &pdev->dev;
+}
+
 static void forge_bat_register(void)
 {
 	struct power_supply *psy;
 
-	psy = power_supply_register(NULL, &forge_bat_desc, NULL);
+	psy = power_supply_register(forge_bat_parent(), &forge_bat_desc, NULL);
 	if (IS_ERR(psy)) {
 		forge_bat.reg_failed = true;
 		pr_err("[FORGE_M681] battery: power_supply 'battery' not registered: %ld\n",
@@ -710,11 +792,13 @@ static void forge_bat_register(void)
 	else
 		forge_usb_psy = psy;
 	if (forge_bat_placeholder)
-		pr_err("[FORGE_M681] battery: l681: registered WITHOUT a valid sample, capacity placeholder %d %% until the first one (never 0 on error)\n",
-		       forge_bat_pub.cap);
+		pr_err("[FORGE_M681] battery: %s: registered WITHOUT a valid sample, capacity placeholder %d %% until the first one (never 0 on error)\n",
+		       forge_bat_bname(), forge_bat_pub.cap);
 	else
 		pr_notice("[FORGE_M681] battery: registered, %d mV, capacity %d %%; %s\n",
 			  forge_bat_pub.vbat_mv, forge_bat_pub.cap,
+			  forge_bat_m1621 ?
+			  "m1621 OCV profile ID1 (XINWANGDA-ATL, 25 C) assumed, battery ID not read" :
 			  forge_bat_l681 ?
 			  "l681 OCV profile ID0 (25 C) assumed, battery ID (AUXADC CH12) not read" :
 			  "OCV profile ID0 (D_ATL, 25 C) assumed, battery ID (AUXADC CH13) not read");
@@ -807,12 +891,12 @@ static void forge_bat_update(int chrdet)
 			       ret, cap);
 	}
 
-	if (ret && forge_bat_l681 && forge_bat_starve_s && chrdet == 0 &&
+	if (ret && forge_bat_ext() && forge_bat_starve_s && chrdet == 0 &&
 	    ktime_after(now, ktime_add_ms(forge_bat_pub.at,
 					  (s64)forge_bat_starve_s * 1000))) {
 		if (!forge_bat_starved)
-			pr_emerg("[FORGE_M681] battery: l681: no valid VBAT sample for %lld s and no cable (last %d): capacity %d -> 0 %%, shutdown by the battery service\n",
-				 ktime_ms_delta(now, forge_bat_pub.at) / 1000,
+			pr_emerg("[FORGE_M681] battery: %s: no valid VBAT sample for %lld s and no cable (last %d): capacity %d -> 0 %%, shutdown by the battery service\n",
+				 forge_bat_bname(), ktime_ms_delta(now, forge_bat_pub.at) / 1000,
 				 ret, cap);
 		forge_bat_starved = true;
 		cap = 0;
@@ -839,8 +923,8 @@ static void forge_bat_update(int chrdet)
 	}
 	if (!ret && forge_bat_starved) {
 		forge_bat_starved = false;
-		pr_notice("[FORGE_M681] battery: l681: valid sample %d mV again after the no-sample 0 %%\n",
-			  m.vbat_mv);
+		pr_notice("[FORGE_M681] battery: %s: valid sample %d mV again after the no-sample 0 %%\n",
+			  forge_bat_bname(), m.vbat_mv);
 	}
 
 	if (empty)
@@ -853,8 +937,8 @@ static void forge_bat_update(int chrdet)
 
 	if (!ret && forge_bat_placeholder) {
 		forge_bat_placeholder = false;
-		pr_notice("[FORGE_M681] battery: l681: first valid sample %d mV, capacity %d %% replaces the placeholder\n",
-			  m.vbat_mv, cap);
+		pr_notice("[FORGE_M681] battery: %s: first valid sample %d mV, capacity %d %% replaces the placeholder\n",
+			  forge_bat_bname(), m.vbat_mv, cap);
 	}
 	if (!ret && !forge_bat_psy && !forge_bat.reg_failed)
 		forge_bat_register();
@@ -869,6 +953,8 @@ static void forge_bat_update(int chrdet)
 				   forge_bat_pub.vbat_mv);
 		return;
 	}
+	if (m3note_is_m1621())
+		return;
 	forge_chg_ctrl_tick(chrdet, forge_bat_pub.temp_dc,
 			    forge_bat_pub.temp_ok && !ret, forge_bat_pub.vbat_mv);
 	/* a CHGEN change made by that tick shows now, not 30 s later */
@@ -957,6 +1043,7 @@ static void forge_bat_show(struct seq_file *m)
 		   forge_bat.ok, forge_bat.failed,
 		   forge_bat.have ?
 		   ktime_ms_delta(ktime_get_boottime(), at) / 1000 : -1LL,
+		   forge_bat_m1621 ? "OCV profile m1621 ID1 (XINWANGDA-ATL, 25 C) assumed" :
 		   forge_bat_l681 ? "OCV profile l681 ID0 (25 C) assumed" :
 		   "OCV profile ID0 (D_ATL, 25 C) assumed");
 	seq_printf(m, "last sample %d: VBAT %d mV (CH1 %d: 0x%04x -> 0x%04x, STA0 0x%04x, %d polls, proof %c); BATON %d mV, %d ohm, %s (CH3 %d: 0x%04x -> 0x%04x, STA0 0x%04x, %d polls, proof %c, only 'A' %u/%u, temp %d)\n",
@@ -970,6 +1057,11 @@ static void forge_bat_show(struct seq_file *m)
 		   l->adc_con0, (l->adc_con0 >> 15) & 1, l->ckpdn0,
 		   (l->ckpdn0 >> 9) & 1, l->ckpdn1, (l->ckpdn1 >> 10) & 1,
 		   l->sta0, l->vbif28, (l->vbif28 >> 15) & 1, l->regs_ok);
+	if (forge_bat_m1621) {
+		seq_puts(m, "charger: BQ25892 by bq25890_charger, see /sys/class/power_supply/bq25890-charger\n");
+		mutex_unlock(&forge_bat_mutex);
+		return;
+	}
 	seq_printf(m, "charger SM5414 (read only): rd %d STATUS 0x%02x (SUSPEND %u BATDET %u THEMSHDN %u), INT1 seen 0x%02x INT2 seen 0x%02x, full %d\n",
 		   forge_sm_ret, forge_sm_status, forge_sm_status & 1,
 		   (forge_sm_status >> 1) & 1, (forge_sm_status >> 2) & 1,
@@ -1010,6 +1102,7 @@ static struct notifier_block forge_rtc_soc_nb = {
 static int __init forge_chg_observe_init(void)
 {
 	forge_bat_l681 = m3note_board_is(M3NOTE_BOARD_L681);
+	forge_bat_m1621 = m3note_is_m1621();
 	if (forge_rtc_soc) {
 		forge_rtc_soc_boot = forge_rtc_soc_get();
 		pr_notice("[FORGE_M681] battery: saved capacity in the RTC: %d\n",
@@ -1037,7 +1130,7 @@ static int __init forge_chg_observe_init(void)
 	 * CHRDET. The first valid sample sets the real estimate
 	 * (forge_bat_filter(): first sample = estimate).
 	 */
-	if (forge_bat_l681 && forge_bat_enable && !forge_bat_psy &&
+	if (forge_bat_ext() && forge_bat_enable && !forge_bat_psy &&
 	    !forge_bat.reg_failed) {
 		forge_bat_pub.cap = FORGE_BAT_PLACEHOLDER_CAP;
 		forge_bat_placeholder = true;

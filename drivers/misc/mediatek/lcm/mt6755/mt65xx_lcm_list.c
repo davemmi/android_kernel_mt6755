@@ -20,6 +20,9 @@
 #if defined(ILI9881P_HD_DSI_TXD)
 extern LCM_DRIVER ili9881p_hd_dsi_txd_lcm_drv;
 #endif
+#if defined(R63350_FHD_DSI_VDO_TCL_SHARP)
+extern LCM_DRIVER r63350_fhd_dsi_vdo_tcl_sharp_lcm_drv;
+#endif
 #if defined(ILI9885_FHD_DSI_VDO_TXD1)
 extern LCM_DRIVER ili9885_fhd_dsi_vdo_txd_lcm_drv1;
 #endif
@@ -43,6 +46,9 @@ LCM_DSI_MODE_CON lcm_dsi_mode;
 #endif
 
 LCM_DRIVER *lcm_driver_list[] = {
+#if defined(R63350_FHD_DSI_VDO_TCL_SHARP)
+	&r63350_fhd_dsi_vdo_tcl_sharp_lcm_drv,	/* Meizu M5 Note m1621 */
+#endif
 #if defined(ILI9881P_HD_DSI_TXD)
 	&ili9881p_hd_dsi_txd_lcm_drv,
 #endif

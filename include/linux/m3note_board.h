@@ -2,6 +2,7 @@
 #define _LINUX_M3NOTE_BOARD_H
 
 #include <linux/types.h>
+#include <linux/of.h>
 
 /*
  * Meizu M3 Note board identity (m681 / l681).
@@ -69,9 +70,22 @@ static inline void m3note_hw_report(void)
  * rotation and turns Android by 180 in SF. An unknown board keeps the
  * flip.
  */
+
+
+/* Meizu M5 Note (m1621): same Wingtech MT6755 design as the m681
+ * (MT6351 keys, 180-degree panel), but its own DT ("meizu,m1621"). It
+ * stays UNKNOWN for m3note_board_id(), so no m681 GPIO owner code runs. */
+static inline bool m3note_is_m1621(void)
+{
+	return of_machine_is_compatible("meizu,m1621");
+}
+
+/* m1621 behaves like l681 here: CONFIG_MTK_LCM_PHYSICAL_ROTATION_HW stays
+ * on (the only display path that scans out on this tree), but no OVL flip,
+ * because the m1621 LK logo and TWRP already draw rotated in memory. */
 static inline bool m3note_lcm_hw_rot180(void)
 {
-	return !m3note_board_is(M3NOTE_BOARD_L681);
+	return !m3note_board_is(M3NOTE_BOARD_L681) && !m3note_is_m1621();
 }
 
 #endif

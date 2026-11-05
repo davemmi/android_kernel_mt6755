@@ -90,8 +90,13 @@ obj-$(CONFIG_THERMAL) += mtk_ts_battery.o
 obj-$(CONFIG_THERMAL) += mtk_ts_bts.o
 obj-$(CONFIG_THERMAL) += mtk_ts_btsmdpa.o
 #obj-$(CONFIG_THERMAL) += mtk_ts_buck.o
+ifeq ($(CONFIG_MTK_M5NOTE),y)
+obj-$(CONFIG_THERMAL) += mtk_ts_pa.o
+obj-$(CONFIG_THERMAL) += mtk_ts_cpu.o
+else
 obj-$(CONFIG_THERMAL) += mtk_ts_cpu.o
 obj-$(CONFIG_THERMAL) += mtk_ts_pa.o
+endif
 obj-$(CONFIG_THERMAL) += mtk_ts_pa_thput.o
 ifeq ($(CONFIG_MACH_MT6755),)
 obj-$(CONFIG_THERMAL) += mtk_ts_pmic.o

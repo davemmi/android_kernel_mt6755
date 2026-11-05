@@ -242,9 +242,9 @@ module_param_named(allow_cam_front, forge_pmic_cam_front, bool, 0644);
 
 /* vibrator LDO (vibrator/mt6755/m681_vibrator.c): RG_VIBR_EN =
  * LDO_VIBR_CON0 0x0A3A bit 1, RG_VIBR_VOSEL = VIBR_ANA_CON0 0x0AE6 [10:8]
- * only at the stock code 5 = 2.8 V (DT vib_vol = <5> on both boards).
- * Stock writes these two fields only. The off write (EN 0) passes with the
- * switch off too: turning allow_vibr off must never leave the motor
+ * at the board's stock code: 5 on m681/l681 and 7 on the M5 (from its stock
+ * DT). Stock writes these two fields only. The off write (EN 0) passes with
+ * the switch off too: turning allow_vibr off must never leave the motor
  * running. */
 static bool forge_pmic_vibr = true;
 module_param_named(allow_vibr, forge_pmic_vibr, bool, 0644);
@@ -290,7 +290,7 @@ static const struct forge_pmic_wl forge_pmic_wl[] = {
 	{ 0x0A80, 0x1, 1, 0, 1, &forge_pmic_cam_front, "LDO_VGP3_CON0 EN (front DVDD)", true, true },
 	{ 0x0AFC, 0x7, 8, 3, 3, &forge_pmic_cam_front, "VGP3_ANA_CON0 VOSEL (1.22 V, front DVDD)", true, true },
 	{ 0x0A3A, 0x1, 1, 0, 1, &forge_pmic_vibr, "LDO_VIBR_CON0 EN (vibrator)", true, true, true },
-	{ 0x0AE6, 0x7, 8, 5, 5, &forge_pmic_vibr, "VIBR_ANA_CON0 VOSEL (2.8 V, vibrator)", true, true },
+	{ 0x0AE6, 0x7, 8, 5, 5, &forge_pmic_vibr, "VIBR_ANA_CON0 VOSEL (vibrator)", true, true },
 };
 
 /* a register may hold several rows, one per field */
@@ -307,11 +307,14 @@ static const struct forge_pmic_wl *forge_pmic_wl_row(u32 reg, u32 mask,
 	return NULL;
 }
 
-/* every row on m681; a row marked l681 on the l681 board too (DT) */
+/* every row on m681; marked l681 rows also on l681 (DT). M1621 receives
+ * only the two vibrator fields below, at its stock VOSEL code. */
 static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 {
 	return of_machine_is_compatible("meizu,m681") ||
-	       (wl->l681 && m3note_board_is(M3NOTE_BOARD_L681));
+	       (wl->l681 && m3note_board_is(M3NOTE_BOARD_L681)) ||
+	       (wl->allow == &forge_pmic_vibr &&
+		of_machine_is_compatible("meizu,m1621"));
 }
 
 /* the row's switch on, or an off write (0) on an off_ok row */
@@ -322,8 +325,13 @@ static bool forge_pmic_wl_on(const struct forge_pmic_wl *wl, u32 code)
 
 static bool forge_pmic_wl_ok(const struct forge_pmic_wl *wl, u32 code)
 {
-	return wl && forge_pmic_wl_on(wl, code) && forge_pmic_wl_board(wl) &&
-	       code >= wl->lo && code <= wl->hi;
+	if (!wl || !forge_pmic_wl_on(wl, code) || !forge_pmic_wl_board(wl))
+		return false;
+
+	if (wl->allow == &forge_pmic_vibr && wl->reg == 0x0AE6)
+		return code == (of_machine_is_compatible("meizu,m1621") ? 7 : 5);
+
+	return code >= wl->lo && code <= wl->hi;
 }
 
 /* The rail setpoints have their own token and lock: a DVFS write must
@@ -436,10 +444,10 @@ int forge_pmic_battery_adc_prepare(void)
 
 	if (!forge_battery_adc)
 		return -EPERM;
-	/* same MT6351 AUXADC on both M3 Note boards (VBAT on the ISENSE IMM
-	 * channel); the board is the DT machine */
+	/* same MT6351 AUXADC on both M3 Note boards and the M5 Note (VBAT on
+	 * the ISENSE IMM channel); the board is the DT machine */
 	if (!of_machine_is_compatible("meizu,m681") &&
-	    !m3note_board_is(M3NOTE_BOARD_L681))
+	    !m3note_board_is(M3NOTE_BOARD_L681) && !m3note_is_m1621())
 		return -ENODEV;
 	if (in_interrupt() || in_atomic() || irqs_disabled())
 		return -EWOULDBLOCK;

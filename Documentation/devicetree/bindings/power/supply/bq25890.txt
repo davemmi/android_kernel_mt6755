@@ -3,9 +3,11 @@ Binding for TI bq25890 Li-Ion Charger
 Required properties:
 - compatible: Should contain one of the following:
     * "ti,bq25890"
+    * "ti,bq25892"
 - reg: integer, i2c address of the device.
 - ti,battery-regulation-voltage: integer, maximum charging voltage (in uV);
 - ti,charge-current: integer, maximum charging current (in uA);
+- ti,input-current-limit: integer, maximum input current limit (in uA);
 - ti,termination-current: integer, charge will be terminated when current in
     constant-voltage phase drops below this value (in uA);
 - ti,precharge-current: integer, maximum charge current during precharge
@@ -18,6 +20,7 @@ Required properties:
     (in uA).
 
 Optional properties:
+- bq25890_irq-gpios: charger interrupt GPIO; if omitted, charger state is polled;
 - ti,boost-low-freq: boolean, if present boost mode frequency will be 500kHz,
     otherwise 1.5MHz;
 - ti,use-ilim-pin: boolean, if present the ILIM resistor will be used and the

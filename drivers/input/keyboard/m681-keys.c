@@ -70,7 +70,8 @@ static int m681_keys_probe(struct platform_device *pdev)
 	 * (kpd-sw-rstkey 115). Codes come from the DT; the board comes from the
 	 * DT machine compatible (m3note_board_id()). */
 	if (!m3note_board_is(M3NOTE_BOARD_M681) &&
-	    !m3note_board_is(M3NOTE_BOARD_L681))
+	    !m3note_board_is(M3NOTE_BOARD_L681) &&
+	    !m3note_is_m1621())	/* m1621: same layout as m681 */
 		return -ENODEV;
 	keys = devm_kzalloc(dev, sizeof(*keys), GFP_KERNEL);
 	if (!keys)

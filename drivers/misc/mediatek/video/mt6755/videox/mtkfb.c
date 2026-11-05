@@ -3175,12 +3175,15 @@ static int mtkfb_remove(struct platform_device *pdev)
  * to SurfaceFlinger alone: the OVL flip is announced to the HWC (caps
  * is_output_rotated) and compensated there; it only shows before SF runs
  * (the boot logo). So the value is the stock one of each board, whatever
- * the OVL does: l681 180 (stock build.prop ro.sf.hwrotation=180), m681 0.
+ * the OVL does: l681 180 (stock build.prop ro.sf.hwrotation=180), m681 0,
+ * m1621 (M5 Note) 180 (stock Flyme getprop ro.sf.hwrotation=180; no OVL
+ * flip on this board, m3note_lcm_hw_rot180()).
  * Kernels without this file flip l681 in the OVL, and the ROM keeps 180. */
 static int forge_sf_hwrotation_get(char *buffer, const struct kernel_param *kp)
 {
 	return scnprintf(buffer, PAGE_SIZE, "%d\n",
-			 m3note_board_is(M3NOTE_BOARD_L681) ? 180 : 0);
+			 (m3note_board_is(M3NOTE_BOARD_L681) ||
+			  m3note_is_m1621()) ? 180 : 0);
 }
 
 static const struct kernel_param_ops forge_sf_hwrotation_ops = {

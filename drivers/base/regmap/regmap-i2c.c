@@ -145,7 +145,7 @@ static int regmap_i2c_gather_write(void *context,
 {
 	struct device *dev = context;
 	struct i2c_client *i2c = to_i2c_client(dev);
-	struct i2c_msg xfer[2];
+	struct i2c_msg xfer[2] = { { 0 } };
 	int ret;
 
 	/* If the I2C controller can't do a gather tell the core, it
@@ -179,7 +179,7 @@ static int regmap_i2c_read(void *context,
 {
 	struct device *dev = context;
 	struct i2c_client *i2c = to_i2c_client(dev);
-	struct i2c_msg xfer[2];
+	struct i2c_msg xfer[2] = { { 0 } };
 	int ret;
 
 	xfer[0].addr = i2c->addr;
