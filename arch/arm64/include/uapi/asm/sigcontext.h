@@ -50,7 +50,13 @@ struct fpsimd_context {
 	struct _aarch64_ctx head;
 	__u32 fpsr;
 	__u32 fpcr;
+#ifdef __SIZEOF_INT128__
 	__uint128_t vregs[32];
+#else
+	/* 32-bit userspace compiled against these headers (Android's
+	 * generated kernel headers): same layout, no 128-bit type */
+	__u64 vregs[64] __attribute__((aligned(16)));
+#endif
 };
 
 /* ESR_EL1 context */

@@ -74,7 +74,13 @@ struct user_pt_regs {
 };
 
 struct user_fpsimd_state {
+#ifdef __SIZEOF_INT128__
 	__uint128_t	vregs[32];
+#else
+	/* 32-bit userspace compiled against these headers (Android's
+	 * generated kernel headers): same layout, no 128-bit type */
+	__u64	vregs[64] __attribute__((aligned(16)));
+#endif
 	__u32		fpsr;
 	__u32		fpcr;
 	__u32		__reserved[2];
