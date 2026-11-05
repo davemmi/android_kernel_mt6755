@@ -305,6 +305,12 @@ HOSTCC       = gcc
 HOSTCXX      = g++
 HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89
 HOSTCXXFLAGS = -O2
+# A clang HOSTCC (LineageOS passes the prebuilt one) links the single-file
+# host tools (fixdep, ...) through HOSTCFLAGS, which 4.9 uses for the link
+# too; the Android build PATH has no "ld", so use lld next to clang.
+ifneq ($(findstring clang,$(HOSTCC)),)
+HOSTCFLAGS   += -fuse-ld=lld -Wno-unused-command-line-argument
+endif
 
 # Decide whether to build built-in, modular, or both.
 # Normally, just do built-in.
