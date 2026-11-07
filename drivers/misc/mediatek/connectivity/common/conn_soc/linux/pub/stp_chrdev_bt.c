@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
+#include <linux/uio.h>
 #include <linux/cdev.h>
 #include <linux/sched.h>
 #include <asm/current.h>
@@ -219,6 +220,59 @@ OUT:
 	return retval;
 }
 
+/*
+ * writev(): one STP packet for the whole vector. The AOSP HIDL BT HAL
+ * (H4Protocol::Send) writes the H4 type byte and the HCI packet as two
+ * iovecs. Without write_iter the VFS calls BT_write() once per iovec, the
+ * type byte goes out as an STP packet of its own, and the CONSYS firmware
+ * stops acking (STP tx timeouts, then a whole-chip reset that also takes
+ * Wi-Fi down). The MTK stack wrote the H4 packet in one write().
+ */
+static ssize_t BT_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	size_t count = iov_iter_count(from);
+	size_t write_size;
+	ssize_t retval;
+	INT32 written;
+
+	down(&wr_mtx);
+
+	if (rstflag) {
+		retval = rstflag == 1 ? -88 : -99;
+		BT_INFO_FUNC("%s: detect whole chip reset %s\n", __func__,
+			     rstflag == 1 ? "start" : "end");
+		goto OUT;
+	}
+
+	if (count == 0) {
+		retval = -EFAULT;
+		BT_ERR_FUNC("Packet length 0 is not allowed\n");
+		goto OUT;
+	}
+
+	write_size = min_t(size_t, count, BT_BUFFER_SIZE);
+	if (count > BT_BUFFER_SIZE)
+		BT_ERR_FUNC("%s: count > BT_BUFFER_SIZE\n", __func__);
+
+	if (copy_from_iter(&o_buf[0], write_size, from) != write_size) {
+		retval = -EFAULT;
+		goto OUT;
+	}
+
+	written = mtk_wcn_stp_send_data(&o_buf[0], write_size, BT_TASK_INDX);
+	if (written == 0) {
+		retval = -ENOSPC;
+		BT_ERR_FUNC("Packet length %zu, sent length %d, retval = %zd\n",
+			    write_size, written, retval);
+	} else {
+		retval = written;
+	}
+
+OUT:
+	up(&wr_mtx);
+	return retval;
+}
+
 ssize_t BT_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
 	static int chip_reset_count;
@@ -391,6 +445,7 @@ const struct file_operations BT_fops = {
 	.release = BT_close,
 	.read = BT_read,
 	.write = BT_write,
+	.write_iter = BT_write_iter,
 /* .ioctl = BT_ioctl, */
 	.unlocked_ioctl = BT_unlocked_ioctl,
 	.compat_ioctl = BT_compat_ioctl,
