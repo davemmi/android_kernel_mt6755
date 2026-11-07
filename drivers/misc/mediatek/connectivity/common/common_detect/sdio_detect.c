@@ -250,11 +250,16 @@ static void sdio_detect_remove(struct sdio_func *func)
 	WMT_DETECT_INFO_FUNC("do sdio remove\n");
 }
 
+/* A second wmt_loader run (COMBO_IOCTL_MODULE_CLEANUP again) unregistered
+ * the already unregistered driver and oopsed in klist_remove(). */
+static bool sdio_detect_registered;
+
 int sdio_detect_init(void)
 {
 	int ret = -1;
 	/* register to mmc driver */
 	ret = sdio_register_driver(&mtk_sdio_client_drv);
+	sdio_detect_registered = (ret == 0);
 	WMT_DETECT_INFO_FUNC("sdio_register_driver() ret=%d\n", ret);
 	return 0;
 }
@@ -262,8 +267,13 @@ int sdio_detect_init(void)
 int sdio_detect_exit(void)
 {
 	g_func = NULL;
+	if (!sdio_detect_registered) {
+		WMT_DETECT_INFO_FUNC("sdio driver not registered, nothing to unregister\n");
+		return 0;
+	}
 	/* register to mmc driver */
 	sdio_unregister_driver(&mtk_sdio_client_drv);
+	sdio_detect_registered = false;
 	WMT_DETECT_INFO_FUNC("sdio_unregister_driver\n");
 	return 0;
 }

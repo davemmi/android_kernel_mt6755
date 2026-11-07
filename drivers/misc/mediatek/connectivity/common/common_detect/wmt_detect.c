@@ -80,6 +80,8 @@ ssize_t wmt_detect_write(struct file *filp, const char __user *buf, size_t count
 	return 0;
 }
 
+static bool wmt_detect_module_inited;
+
 static long wmt_detect_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int retval = 0;
@@ -132,8 +134,16 @@ static long wmt_detect_unlocked_ioctl(struct file *filp, unsigned int cmd, unsig
 
 	case COMBO_IOCTL_DO_MODULE_INIT:
 #if (MTK_WCN_REMOVE_KO)
-		/*deinit SDIO-DETECT module */
+		/* once per boot: a second wmt_loader run must not register the
+		 * WMT/STP/BT/Wi-Fi drivers again */
+		if (wmt_detect_module_inited) {
+			WMT_DETECT_INFO_FUNC("connectivity drivers already initialized\n");
+			retval = 0;
+			break;
+		}
 		retval = do_connectivity_driver_init(arg);
+		/* even a partial init registered drivers */
+		wmt_detect_module_inited = true;
 #else
 		WMT_DETECT_INFO_FUNC("no MTK_WCN_REMOVE_KO defined\n");
 #endif
