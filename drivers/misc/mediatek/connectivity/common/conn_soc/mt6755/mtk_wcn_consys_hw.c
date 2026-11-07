@@ -42,6 +42,7 @@
 #include <linux/clk.h>
 #endif /* defined(CONFIG_MTK_LEGACY) */
 #include <linux/delay.h>
+#include <linux/of.h>
 #include <linux/memblock.h>
 #include <linux/platform_device.h>
 #include "osal_typedef.h"
@@ -198,6 +199,25 @@ static bool forge_conn_vosel_ok(int ldo)
 	ret = pmic_read_interface_nolock(forge_conn_vosel[ldo].addr, &v,
 					 forge_conn_vosel[ldo].mask,
 					 forge_conn_vosel[ldo].shift);
+	/* M5 Note (m1621): its LK leaves the selectors at reset values (VCN28
+	 * read 0 = 1.8 V). Set exactly the stock code, as the stock consys
+	 * driver does before enabling the rail (regulator_set_voltage), and
+	 * read it back; the PMIC gate passes only that one code per rail
+	 * (mt_pmic_stub.c allow_conn_vosel). The rail is still off here. */
+	if (!ret && v != forge_conn_vosel[ldo].want &&
+	    of_machine_is_compatible("meizu,m1621")) {
+		pr_emerg("[FORGE_CONN] %s VOSEL %u -> %u (%u mV), m1621\n",
+			 forge_conn_vosel[ldo].name, v,
+			 forge_conn_vosel[ldo].want, forge_conn_vosel[ldo].mv);
+		forge_conn_vcn_write("VOSEL", forge_conn_vosel[ldo].addr,
+				     forge_conn_vosel[ldo].want,
+				     forge_conn_vosel[ldo].mask,
+				     forge_conn_vosel[ldo].shift);
+		v = ~0U;
+		ret = pmic_read_interface_nolock(forge_conn_vosel[ldo].addr, &v,
+						 forge_conn_vosel[ldo].mask,
+						 forge_conn_vosel[ldo].shift);
+	}
 	if (ret || v != forge_conn_vosel[ldo].want) {
 		pr_emerg("[FORGE_CONN] %s VOSEL mismatch: read %u (ret %d), want %u (%u mV) - rail left off, consys not powered\n",
 			 forge_conn_vosel[ldo].name, v, (int)ret,

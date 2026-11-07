@@ -253,6 +253,11 @@ module_param_named(allow_vibr, forge_pmic_vibr, bool, 0644);
 /* MSDC1 may change only the four VMCH/VMC enable and voltage-selector
  * fields on the Meizu M5 Note. */
 static bool forge_pmic_sd = true;
+/* M5 Note CONSYS: LK leaves VCN18/VCN28/VCN33 VOSEL at reset values there
+ * (VCN28 reads 0 = 1.8 V); the consys power-on sets exactly the stock
+ * voltages before it enables a rail (mtk_wcn_consys_hw.c). */
+static bool forge_pmic_conn_vosel = true;
+module_param_named(allow_conn_vosel, forge_pmic_conn_vosel, bool, 0644);
 module_param_named(allow_msdc1, forge_pmic_sd, bool, 0644);
 
 struct forge_pmic_wl {
@@ -287,6 +292,12 @@ static const struct forge_pmic_wl forge_pmic_wl[] = {
 	{ 0x0A98, 0x1, 3, 0, 1, &forge_pmic_conn, "LDO_VCN33_CON3 ON_CTRL (BT)", true, true },
 	{ 0x0A9A, 0x1, 1, 0, 1, &forge_pmic_conn, "LDO_VCN33_CON4 EN (WIFI)", true, true },
 	{ 0x0A9A, 0x1, 3, 0, 1, &forge_pmic_conn, "LDO_VCN33_CON4 ON_CTRL (WIFI)", true, true },
+	/* m1621 only, one code each: the stock consys voltages (MT6351 LDO
+	 * tables of the MT6755 BSP: VCN18 6 = 1.8 V, VCN28 3 = 2.8 V,
+	 * VCN33 0 = 3.3 V) */
+	{ 0x0B18, 0x7, 8, 6, 6, &forge_pmic_conn_vosel, "VCN18_ANA_CON0 VOSEL (1.8 V)", true },
+	{ 0x0ACC, 0x3, 8, 3, 3, &forge_pmic_conn_vosel, "VCN28_ANA_CON0 VOSEL (2.8 V)", true },
+	{ 0x0ADA, 0x3, 9, 0, 0, &forge_pmic_conn_vosel, "VCN33_ANA_CON0 VOSEL (3.3 V)", true },
 	{ 0x0A12, 0x1, 1, 0, 1, &forge_pmic_cam, "LDO_VCAMA_CON0 EN", true, true },
 	{ 0x0AD6, 0x7, 8, 3, 3, &forge_pmic_cam, "VCAMA_ANA_CON0 VOSEL (2.8 V)", true, true },
 	{ 0x0A40, 0x1, 1, 0, 1, &forge_pmic_cam, "LDO_VCAMD_CON0 EN", true, true },
@@ -330,7 +341,8 @@ static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 	       /* CONSYS (Wi-Fi/BT/GPS): the same MT6755 connsys and VCN18/
 		* VCN28/VCN33 rails as the M681 (stock M5 firmware
 		* WIFI_RAM_CODE_6755, WMT_SOC.cfg); EN/ON_CTRL rows only */
-	       (wl->allow == &forge_pmic_conn &&
+	       ((wl->allow == &forge_pmic_conn ||
+		 wl->allow == &forge_pmic_conn_vosel) &&
 		of_machine_is_compatible("meizu,m1621"));
 }
 
