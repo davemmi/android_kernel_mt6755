@@ -2133,12 +2133,21 @@ EXPORT_SYMBOL(forge_m681_emmc_mark);
  * Same ktime scale as BOOTPROF ms.
  */
 static struct timer_list forge_hb_timer;
+
+/* 1 = print every beat (default, so a boot that dies early leaves the
+ * trail); 0 = only the 0xFB last-beat slot and the RGU watch, set by init
+ * after boot_completed. Runtime:
+ * /sys/module/forge_m681_marker/parameters/forge_hb_log. */
+static bool forge_hb_log = true;
+module_param(forge_hb_log, bool, 0644);
+
 static void forge_hb_fn(unsigned long data)
 {
 	u32 ms = (u32)(ktime_to_ns(ktime_get()) / 1000000);
 	void __iomem *b = toprgu_base ? toprgu_base : forge_wdt_base;
 
-	pr_emerg("[FORGE_M681] HB ms=%u cpu=%d\n", ms, raw_smp_processor_id());
+	if (READ_ONCE(forge_hb_log))
+		pr_emerg("[FORGE_M681] HB ms=%u cpu=%d\n", ms, raw_smp_processor_id());
 
 	/* last-heartbeat slot (0xFB tag | uptime in 100ms units): records the
 	 * time of death even if every console page is lost. */

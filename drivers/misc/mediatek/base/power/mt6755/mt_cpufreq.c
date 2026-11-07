@@ -514,6 +514,19 @@ static unsigned int _mt_cpufreq_get_cpu_level(void)
 	 * differ on this kernel; the rows below 1.000 V (big 1196.., LL 689..)
 	 * are the same in every ladder.
 	 */
+	/*
+	 * m1621 (M5 Note): MT6351 + MT6311 at i2c-3 0x6b (chip id 0x0120) like
+	 * m681, LK leaves VPROC at 0x40 = 1.000 V. Its efuse bin is not
+	 * checked against stock, so it runs frequency-only like an l681 that
+	 * fails the FY rule; level 1 only picks the table, the rows legal at
+	 * 1.000 V are the same in every ladder.
+	 */
+	if (m3note_is_m1621()) {
+		pr_info_once("[FORGE_M1621] cpufreq: level 1 (FY) fixed, frequency-only; efuse 21 func_code_0 0x%x, 19 binLevel_eng 0x%x (stock rule says %s)\n",
+			     func_code_0, binLevel_eng,
+			     forge_l681_efuse_fy() ? "FY" : "SB");
+		return CPU_LEVEL_1;
+	}
 	if (m3note_board_is(M3NOTE_BOARD_L681)) {
 		bool fy = forge_l681_efuse_fy();
 
@@ -5476,7 +5489,7 @@ MODULE_PARM_DESC(forge_mt_cpufreq,
 static bool forge_mt_cpufreq_autoarm = true;
 module_param(forge_mt_cpufreq_autoarm, bool, 0644);
 MODULE_PARM_DESC(forge_mt_cpufreq_autoarm,
-		 "M681/L681: arm the freq-only cpufreq forge_mt_cpufreq_autoarm_delay_s after late init (default 1)");
+		 "M681/L681/M1621: arm the freq-only cpufreq forge_mt_cpufreq_autoarm_delay_s after late init (default 1)");
 
 /* Arm well after boot_completed, so that a hang at the first frequency
  * switch meets a live adb and UI instead of a boot in progress. */
@@ -5491,6 +5504,7 @@ static void forge_mt_cpufreq_autoarm_fn(struct work_struct *work)
 		return;
 	ret = forge_mt_cpufreq_set("1", NULL);
 	pr_err("[FORGE_CPUFREQ] auto-arm on %s: %d\n",
+	       m3note_is_m1621() ? "M1621" :
 	       m3note_board_is(M3NOTE_BOARD_L681) ? "L681" : "M681", ret);
 }
 static DECLARE_DELAYED_WORK(forge_mt_cpufreq_autoarm_work,
@@ -5499,8 +5513,10 @@ static DECLARE_DELAYED_WORK(forge_mt_cpufreq_autoarm_work,
 static int __init _mt_cpufreq_pdrv_init(void)
 {
 	pr_info("[FORGE_CPUFREQ] built (freq-only, clamped); arm: echo 1 > /sys/module/mt_cpufreq/parameters/forge_mt_cpufreq\n");
+	/* m1621: never voltage DVFS (forge_full_dvfs_board() is false), the
+	 * MT6311 VPROC stays at the 1.000 V LK left */
 	if (of_machine_is_compatible("meizu,m681") ||
-	    m3note_board_is(M3NOTE_BOARD_L681))
+	    m3note_board_is(M3NOTE_BOARD_L681) || m3note_is_m1621())
 		schedule_delayed_work(&forge_mt_cpufreq_autoarm_work,
 				      forge_mt_cpufreq_autoarm_delay_s * HZ);
 	return 0;
