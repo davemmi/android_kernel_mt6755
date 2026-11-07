@@ -326,6 +326,11 @@ static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 	       (wl->allow == &forge_pmic_vibr &&
 		of_machine_is_compatible("meizu,m1621")) ||
 	       (wl->allow == &forge_pmic_sd &&
+		of_machine_is_compatible("meizu,m1621")) ||
+	       /* CONSYS (Wi-Fi/BT/GPS): the same MT6755 connsys and VCN18/
+		* VCN28/VCN33 rails as the M681 (stock M5 firmware
+		* WIFI_RAM_CODE_6755, WMT_SOC.cfg); EN/ON_CTRL rows only */
+	       (wl->allow == &forge_pmic_conn &&
 		of_machine_is_compatible("meizu,m1621"));
 }
 
