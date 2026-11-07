@@ -357,6 +357,27 @@
 	};
 };
 
+&mmc1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&m1621_msdc1_pins_default>;
+	cd-gpios = <&pio 3 0>;
+	cd_level = /bits/ 8 <1>;
+};
+
+&pio {
+	m1621_msdc1_pins_default: msdc1-default {
+		pins_cmd_dat {
+			pins = <
+				PINMUX_GPIO30__FUNC_MSDC1_CLK
+				PINMUX_GPIO31__FUNC_MSDC1_DAT3
+				PINMUX_GPIO32__FUNC_MSDC1_CMD
+				PINMUX_GPIO33__FUNC_MSDC1_DAT0
+				PINMUX_GPIO34__FUNC_MSDC1_DAT2
+				PINMUX_GPIO35__FUNC_MSDC1_DAT1
+			>;
+		};
+	};
+};
 
 /* Keypad as in the stock DCT (cust_kpd.dtsi): matrix pos0 = VOLDOWN,
  * pos1 = VOLUP, rstkey = HOME (102). The generic cust.dtsi maps only

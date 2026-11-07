@@ -4,7 +4,8 @@
  * Reads go to the hardware through pwrap (pmic_read_interface,
  * pmic_get_register_value via the MT6351 pmu_flags_table). Writes are
  * dropped and counted (dropped_writes / last_dropped) unless an allowlist
- * row below owns the field. The remaining APIs
+ * row below owns the field. Dedicated M1621 MSDC1 APIs use the same owned
+ * field path for VMCH/VMC. The remaining APIs
  * (pmic_config_interface_nospinlock, pmic_force_vcore_pwm,
  * upmu_is_chr_det, is_mt6311_exist, ...) are stubs for callers in
  * subsystems that are not built.
@@ -13,6 +14,7 @@
 #include <linux/export.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
+#include <linux/delay.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/io.h>
@@ -26,15 +28,14 @@
 
 #ifdef CONFIG_MTK_PMIC_WRAP_HAL
 /*
- * READ-ONLY PMIC access. With the pwrap chip HAL built
+ * Restricted PMIC access. With the pwrap chip HAL built
  * (pmic_wrap/mt6755/pwrap_hal_v1.c, WACS2 on the LK-initialised wrapper),
  * reads are real: pmic_read_interface[_nolock] go through pwrap_wacs2(), and
  * pmic_get_register_value[_nolock] index the MT6351 pmu_flags_table
- * (mt_pmic_flags_mt6351.c, 3.10 stock). Writes stay no-ops here (counted;
+ * (mt_pmic_flags_mt6351.c, 3.10 stock). Writes are dropped here (counted;
  * the first one is logged with its caller) and the HAL drops any direct
- * pwrap_write too, so no PMIC register changes until kernel-turns
- * writes on after a hardware check - so far only the touch rail enable
- * (forge_pmic_touch_write() below). Battery requests and own AUXADC clock
+ * pwrap_write too, except for task-owned, allowlisted writes. Battery
+ * requests and own AUXADC clock
  * preparation below use separate default-off, task-owned permissions. Telemetry:
  * /sys/module/mt_pmic_stub/parameters/{dropped_writes,last_dropped}.
  */
@@ -249,6 +250,11 @@ module_param_named(allow_cam_front, forge_pmic_cam_front, bool, 0644);
 static bool forge_pmic_vibr = true;
 module_param_named(allow_vibr, forge_pmic_vibr, bool, 0644);
 
+/* MSDC1 may change only the four VMCH/VMC enable and voltage-selector
+ * fields on the Meizu M5 Note. */
+static bool forge_pmic_sd = true;
+module_param_named(allow_msdc1, forge_pmic_sd, bool, 0644);
+
 struct forge_pmic_wl {
 	u16 reg;
 	u8 mask, shift;		/* the field */
@@ -291,6 +297,10 @@ static const struct forge_pmic_wl forge_pmic_wl[] = {
 	{ 0x0AFC, 0x7, 8, 3, 3, &forge_pmic_cam_front, "VGP3_ANA_CON0 VOSEL (1.22 V, front DVDD)", true, true },
 	{ 0x0A3A, 0x1, 1, 0, 1, &forge_pmic_vibr, "LDO_VIBR_CON0 EN (vibrator)", true, true, true },
 	{ 0x0AE6, 0x7, 8, 5, 5, &forge_pmic_vibr, "VIBR_ANA_CON0 VOSEL (vibrator)", true, true },
+	{ 0x0A2E, 0x1, 1, 0, 1, &forge_pmic_sd, "LDO_VMCH_CON0 EN (microSD)", false, false, true },
+	{ 0x0ACE, 0x1, 8, 0, 0, &forge_pmic_sd, "VMCH_ANA_CON0 VOSEL (3.0 V microSD)", false },
+	{ 0x0AAA, 0x1, 1, 0, 1, &forge_pmic_sd, "LDO_VMC_CON0 EN (microSD)", false, false, true },
+	{ 0x0AE2, 0x7, 8, 3, 6, &forge_pmic_sd, "VMC_ANA_CON0 VOSEL (microSD)", false },
 };
 
 /* a register may hold several rows, one per field */
@@ -308,12 +318,14 @@ static const struct forge_pmic_wl *forge_pmic_wl_row(u32 reg, u32 mask,
 }
 
 /* every row on m681; marked l681 rows also on l681 (DT). M1621 receives
- * only the two vibrator fields below, at its stock VOSEL code. */
+ * only its stock vibrator fields and the narrowly scoped MSDC1 rail fields. */
 static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 {
 	return of_machine_is_compatible("meizu,m681") ||
 	       (wl->l681 && m3note_board_is(M3NOTE_BOARD_L681)) ||
 	       (wl->allow == &forge_pmic_vibr &&
+		of_machine_is_compatible("meizu,m1621")) ||
+	       (wl->allow == &forge_pmic_sd &&
 		of_machine_is_compatible("meizu,m1621"));
 }
 
@@ -330,6 +342,8 @@ static bool forge_pmic_wl_ok(const struct forge_pmic_wl *wl, u32 code)
 
 	if (wl->allow == &forge_pmic_vibr && wl->reg == 0x0AE6)
 		return code == (of_machine_is_compatible("meizu,m1621") ? 7 : 5);
+	if (wl->allow == &forge_pmic_sd && wl->reg == 0x0AE2)
+		return code == 3 || code == 6;
 
 	return code >= wl->lo && code <= wl->hi;
 }
@@ -558,6 +572,107 @@ int forge_pmic_vsram_ctrl_set(u32 on)
 	return forge_pmic_wl_write(forge_pmic_wl_row(FORGE_VSRAM_CON0_REG, 0x1, 1),
 				   on ? 1 : 0);
 }
+
+static int forge_pmic_sd_write(const struct forge_pmic_wl *wl, u32 code)
+{
+	u32 value = 0;
+	s32 ret;
+
+	ret = forge_pmic_wl_write(wl, code);
+	if (ret)
+		return ret;
+
+	ret = pwrap_wacs2(0, wl->reg, 0, &value);
+	if (ret)
+		return ret;
+	if (((value >> wl->shift) & wl->mask) != code) {
+		pr_err("[FORGE_M681] MSDC1 readback mismatch: %s 0x%04x expected %u, got %u\n",
+		       wl->name, wl->reg, code,
+		       (value >> wl->shift) & wl->mask);
+		return -EIO;
+	}
+	return 0;
+}
+
+static int forge_pmic_sd_check_status(u32 reg, bool expected_on)
+{
+	u32 value = 0;
+	s32 ret = pwrap_wacs2(0, reg, 0, &value);
+	bool is_on;
+
+	if (ret)
+		return ret;
+	is_on = !!(value & BIT(15));
+	pr_notice("[FORGE_M681] MSDC1 rail status 0x%04x=%04x, expected %s\n",
+		  reg, value, expected_on ? "on" : "off");
+	return is_on == expected_on ? 0 : -EIO;
+}
+
+int forge_pmic_sd_power(int card_on, int io_on)
+{
+	const struct forge_pmic_wl *vmch_vosel =
+		forge_pmic_wl_row(0x0ACE, 0x1, 8);
+	const struct forge_pmic_wl *vmc_vosel =
+		forge_pmic_wl_row(0x0AE2, 0x7, 8);
+	const struct forge_pmic_wl *vmch_en =
+		forge_pmic_wl_row(0x0A2E, 0x1, 1);
+	const struct forge_pmic_wl *vmc_en =
+		forge_pmic_wl_row(0x0AAA, 0x1, 1);
+	int ret;
+
+	if (!of_machine_is_compatible("meizu,m1621"))
+		return -ENODEV;
+	if (io_on && !card_on)
+		return -EINVAL;
+
+	if (!io_on) {
+		ret = forge_pmic_sd_write(vmc_en, 0);
+		if (ret)
+			return ret;
+		msleep(10);
+		ret = forge_pmic_sd_check_status(0x0AAA, false);
+		if (ret)
+			return ret;
+	}
+	if (!card_on) {
+		ret = forge_pmic_sd_write(vmch_en, 0);
+		if (ret)
+			return ret;
+		msleep(10);
+		return forge_pmic_sd_check_status(0x0A2E, false);
+	}
+
+	ret = forge_pmic_sd_write(vmch_vosel, 0);
+	if (!ret)
+		ret = forge_pmic_sd_write(vmch_en, 1);
+	if (ret)
+		return ret;
+	msleep(10);
+	ret = forge_pmic_sd_check_status(0x0A2E, true);
+	if (ret || !io_on)
+		return ret;
+
+	ret = forge_pmic_sd_write(vmc_vosel, 6);
+	if (!ret)
+		ret = forge_pmic_sd_write(vmc_en, 1);
+	if (ret)
+		return ret;
+	msleep(10);
+	return forge_pmic_sd_check_status(0x0AAA, true);
+}
+EXPORT_SYMBOL(forge_pmic_sd_power);
+
+int forge_pmic_sd_set_vmc_voltage(int uhs_1v8)
+{
+	const struct forge_pmic_wl *vmc_vosel =
+		forge_pmic_wl_row(0x0AE2, 0x7, 8);
+
+	if (!of_machine_is_compatible("meizu,m1621"))
+		return -ENODEV;
+
+	return forge_pmic_sd_write(vmc_vosel, uhs_1v8 ? 3 : 6);
+}
+EXPORT_SYMBOL(forge_pmic_sd_set_vmc_voltage);
 
 unsigned int pmic_config_interface(unsigned int RegNum, unsigned int val,
 				   unsigned int MASK, unsigned int SHIFT)

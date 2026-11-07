@@ -39,13 +39,12 @@
 extern bool forge_pmic_adc_consume(u32 adr, u32 value);
 
 /*
- * Read-only WACS2 on the LK-initialised wrapper. LK brings pwrap up
+ * WACS2 on the LK-initialised wrapper. LK brings pwrap up
  * (INIT_DONE2) and the kernel never runs pwrap_init() (no reset/SPI-clock/
- * DIO/cipher/sistrobe re-init). In addition no PMIC write leaves the AP:
- * pwrap_wacs2_hal() drops write commands (counted, first one logged), so
- * every PMIC write is a no-op unless explicitly allowed. Allowed: the
- * touch rail enable bits, VLDO28 CON3/CON4 (see mt_pmic_stub.c), and the
- * owned tokens below. WACS2 is wired only if (a) the infracfg_ao
+ * DIO/cipher/sistrobe re-init). PMIC writes are rejected unless explicitly
+ * allowlisted. Allowed: the touch rail enable bits, VLDO28 CON3/CON4 (see
+ * mt_pmic_stub.c), and owned field tokens, including the M1621 MSDC1 VMCH/VMC
+ * fields. WACS2 is wired only if (a) the infracfg_ao
  * PMIC_TMR/PMIC_AP clock gates read open (STA0 0x10001090 bits 0/1 == 0) and
  * (b) INIT_DONE2 is set; otherwise pwrap_wacs2() keeps failing with -5 and no
  * pwrap register is touched again. FLOG marks: 0xA1 aux 0x01..0x04,
@@ -616,13 +615,14 @@ static s32 pwrap_wacs2_hal(u32 write, u32 adr, u32 wdata, u32 *rdata)
 
 	spin_lock_irqsave(&wrp_lock, flags);
 
-	/* Read-only WACS2: drop the write, report the first one. The one
-	 * exception is the touch rail enable, VLDO28 CON3/CON4 (0x0AA2/0x0AA4);
+	/* Restricted WACS2: drop any unowned write, report the first one. The
+	 * only direct exception is the touch rail enable, VLDO28 CON3/CON4
+	 * (0x0AA2/0x0AA4);
 	 * mt_pmic_stub.c only passes a bit-1 read-modify-write there
 	 * (touch_rail=0 drops it again). The owned tokens of
 	 * forge_pmic_adc_consume() (mt_pmic_stub.c) pass the battery ADC request
-	 * and clocks and the allowlisted field rows (DVFS rail setpoints, connsys
-	 * VCN EN/ON_CTRL). */
+	 * and clocks and the allowlisted field rows (DVFS, connsys VCN, and
+	 * M1621 MSDC1 VMCH/VMC fields). */
 	if (write && adr != 0x0AA2 && adr != 0x0AA4 &&
 	    !forge_rtc_token_consume(adr, wdata) &&
 	    !forge_pmic_adc_consume(adr, wdata)) {
@@ -630,7 +630,7 @@ static s32 pwrap_wacs2_hal(u32 write, u32 adr, u32 wdata, u32 *rdata)
 		forge_pwrap_last_blocked = (adr << 16) | wdata;
 		spin_unlock_irqrestore(&wrp_lock, flags);
 		if (forge_pwrap_blocked_writes == 1)
-			pr_warn(PWRAPTAG "m681 4.9 read-only WACS2: PMIC write adr=0x%04x wdata=0x%04x dropped (count in /sys/module/pwrap_hal_v1/parameters/blocked_writes)\n",
+			pr_warn(PWRAPTAG "m681 4.9 restricted WACS2: PMIC write adr=0x%04x wdata=0x%04x dropped (count in /sys/module/pwrap_hal_v1/parameters/blocked_writes)\n",
 				adr, wdata);
 		/* direct pwrap_write callers (the keywatch) see that it
 		 * did not happen. pmic_config_* writes outside the K6 rows are
@@ -2146,4 +2146,3 @@ static int __init pwrap_hal_init(void)
 	return ret;
 }
 postcore_initcall(pwrap_hal_init);
-

@@ -12,9 +12,9 @@
 #
 
 
-# Always the v1 HAL. There is no PMIC driver (NEW_ARCH off), only the
-# read-only PMIC access in base/power/mt6755, and the HAL itself refuses to
-# init pwrap or to write the PMIC (see its header). Keyed to
+# Always the v1 HAL. There is no full PMIC driver (NEW_ARCH off); the
+# M681-initialized wrapper is accessed without reinitialization and the HAL
+# permits only explicitly owned/allowlisted writes (see its header). Keyed to
 # MTK_PMIC_WRAP_HAL, not MTK_PMIC_WRAP (the upstream drivers/soc/mediatek
 # pwrap).
 obj-$(CONFIG_MTK_PMIC_WRAP_HAL) +=  pwrap_hal_v1.o

@@ -12,7 +12,7 @@
 
 /*
  * MT6755 board layer for the ComboA MSDC core; see msdc_cust.h for where
- * each value comes from. Serves msdc0 (eMMC) only.
+ * each value comes from. Serves msdc0 (eMMC) and msdc1 (microSD).
  */
 
 #ifdef pr_fmt
@@ -27,12 +27,18 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
 #include <linux/clk.h>
 #include <linux/slab.h>
 
+#include "mach/mt_pmic_wrap.h"
 #include "mtk_sd.h"
 #include "dbg.h"
+
+extern int forge_pmic_sd_power(int card_on, int io_on);
+extern int forge_pmic_sd_set_vmc_voltage(int uhs_1v8);
+
 struct msdc_host *mtk_msdc_host[] = {NULL, NULL};
 EXPORT_SYMBOL(mtk_msdc_host);
 
@@ -101,11 +107,9 @@ void __iomem *msdc_io_cfg_bases[HOST_MAX_NUM];
 /**************************************************************/
 #if !defined(FPGA_PLATFORM)
 /*
- * The MT6351 PMIC sits behind a read-only pwrap here (mt_pmic_stub.c), so
- * regulator_get("vmmc") returns an ERR_PTR (probe deferral of the
- * never-registered VEMC LDO), not NULL, and dereferencing it in
- * regulator_set_voltage() oopses; guard with IS_ERR_OR_NULL. VEMC is left
- * on by the preloader/LK and is neither programmed nor switched off here.
+ * The MT6351 regulator provider is unavailable on this build. Guard
+ * regulator consumers here; MSDC1 uses narrowly allowlisted PMIC fields
+ * for its VMCH/VMC rails instead.
  */
 int msdc_regulator_set_and_enable(struct regulator *reg, int powerVolt)
 {
@@ -165,8 +169,14 @@ void msdc_sd_power_switch(struct msdc_host *host, u32 on)
 {
 #if !defined(CONFIG_MTK_MSDC_BRING_UP_BYPASS)
 	if (host->id == 1) {
-		msdc_ldo_power(on, host->mmc->supply.vqmmc, VOL_1800,
-			&host->power_io);
+		int ret = forge_pmic_sd_set_vmc_voltage(on);
+
+		if (ret) {
+			pr_err("[msdc1] failed to set VMC voltage for %s mode: %d\n",
+			       on ? "1.8 V" : "3.0 V", ret);
+			return;
+		}
+		host->power_io = on ? VOL_1800 * 1000 : VOL_3000 * 1000;
 		msdc_set_tdsel(host, MSDC_TDRDSEL_1V8, 0);
 		msdc_set_rdsel(host, MSDC_TDRDSEL_1V8, 0);
 		host->hw->driving_applied = &host->hw->driving_sdr50;
@@ -178,10 +188,27 @@ void msdc_sd_power_switch(struct msdc_host *host, u32 on)
 void msdc_power_calibration_init(struct msdc_host *host)
 {
 	/*
-	 * The stock kernels trim VEMC (-100 mV) and VMC/VMCH through PMIC
-	 * calibration registers here; with the PMIC stubbed that write cannot
-	 * happen.
+	 * MSDC1 uses only the allowlisted VMCH/VMC enable and voltage-selector
+	 * fields when powering the rails.
 	 */
+}
+
+static void msdc_log_sd_pmic_state(struct msdc_host *host, const char *phase)
+{
+	u32 vmch_con0 = 0, vmch_ana = 0, vmc_con0 = 0, vmc_ana = 0;
+	s32 ret_vmch, ret_vmch_ana, ret_vmc, ret_vmc_ana;
+
+	if (host->id != 1)
+		return;
+
+	ret_vmch = pwrap_read(0x0A2E, &vmch_con0);
+	ret_vmch_ana = pwrap_read(0x0ACE, &vmch_ana);
+	ret_vmc = pwrap_read(0x0AAA, &vmc_con0);
+	ret_vmc_ana = pwrap_read(0x0AE2, &vmc_ana);
+	pr_notice("[msdc1] PMIC %s: VMCH 0A2E=%04x(%d) 0ACE=%04x(%d), "
+		  "VMC 0AAA=%04x(%d) 0AE2=%04x(%d)\n",
+		  phase, vmch_con0, ret_vmch, vmch_ana, ret_vmch_ana,
+		  vmc_con0, ret_vmc, vmc_ana, ret_vmc_ana);
 }
 
 int msdc_oc_check(struct msdc_host *host, u32 en)
@@ -209,7 +236,9 @@ void msdc_sd_power(struct msdc_host *host, u32 on)
 {
 #if !defined(CONFIG_MTK_MSDC_BRING_UP_BYPASS)
 	u32 card_on = on;
+	int ret;
 
+	msdc_log_sd_pmic_state(host, on ? "before power-on" : "before power-off");
 	switch (host->id) {
 	case 1:
 		msdc_set_driving(host, &host->hw->driving);
@@ -217,18 +246,20 @@ void msdc_sd_power(struct msdc_host *host, u32 on)
 		msdc_set_rdsel(host, MSDC_TDRDSEL_3V, 0);
 		if (host->hw->flags & MSDC_SD_NEED_POWER)
 			card_on = 1;
-
-		/* VMCH VOLSEL */
-		msdc_ldo_power(card_on, host->mmc->supply.vmmc, VOL_3000,
-			&host->power_flash);
-		/* VMC VOLSEL */
-		msdc_ldo_power(on, host->mmc->supply.vqmmc, VOL_3000,
-			&host->power_io);
+		ret = forge_pmic_sd_power(card_on, on);
+		if (ret) {
+			pr_err("[msdc1] failed to %s microSD rails: %d\n",
+			       card_on ? "enable" : "disable", ret);
+			break;
+		}
+		host->power_flash = card_on ? VOL_3000 * 1000 : 0;
+		host->power_io = on ? VOL_3000 * 1000 : 0;
 		break;
 
 	default:
 		break;
 	}
+	msdc_log_sd_pmic_state(host, on ? "after power-on" : "after power-off");
 #endif
 #ifdef MTK_MSDC_BRINGUP_DEBUG
 	msdc_dump_ldo_sts(NULL, 0, NULL, host);
@@ -704,6 +735,7 @@ int msdc_of_parse(struct platform_device *pdev, struct mmc_host *mmc)
 	struct device_node *np;
 	struct msdc_host *host = mmc_priv(mmc);
 	int ret = 0;
+	int gpio;
 	u8 id;
 
 	np = mmc->parent->of_node; /* mmcx node in project dts */
@@ -724,13 +756,13 @@ int msdc_of_parse(struct platform_device *pdev, struct mmc_host *mmc)
 	}
 
 	/*
-	 * Only eMMC (msdc0) is served. msdc1 (microSD) needs the MT6351 VMCH/VMC
-	 * LDOs, unreachable while pwrap is read-only; msdc2 (SDIO WiFi) is also
-	 * dropped by the probe denylist. Refuse them here, before any register
-	 * access.
+	 * Serve eMMC (msdc0) and removable microSD (msdc1). Keep msdc2 (SDIO
+	 * WiFi) disabled. The M681 PMIC wrapper is read-only in this build, so
+	 * the existing regulator helpers continue to avoid writes to absent
+	 * VMCH/VMC supplies.
 	 */
-	if (id != 0) {
-		pr_notice("[msdc%d] %s: not served on m681 4.9 (eMMC only)\n",
+	if (id != 0 && id != 1) {
+		pr_notice("[msdc%d] %s: not served on m681 4.9 (eMMC/microSD only)\n",
 			id, np->name);
 		return -ENODEV;
 	}
@@ -790,6 +822,29 @@ int msdc_of_parse(struct platform_device *pdev, struct mmc_host *mmc)
 	if (of_property_read_u8(np, "host_function", &host->hw->host_function))
 		pr_notice("[msdc%d] host_function isn't found in device tree\n",
 			host->id);
+
+	if (id == 1) {
+		gpio = of_get_named_gpio(np, "cd-gpios", 0);
+		if (!gpio_is_valid(gpio)) {
+			pr_notice("[msdc%d] invalid card-detect GPIO: %d\n",
+				id, gpio);
+			return gpio < 0 ? gpio : -EINVAL;
+		}
+		ret = of_property_read_u8(np, "cd_level", &host->hw->cd_level);
+		if (ret) {
+			pr_notice("[msdc%d] failed to read card-detect level: %d\n",
+				id, ret);
+			return ret;
+		}
+		if (host->hw->cd_level > 1) {
+			pr_notice("[msdc%d] invalid card-detect level: %u\n",
+				id, host->hw->cd_level);
+			return -EINVAL;
+		}
+		cd_gpio = gpio;
+		pr_notice("[msdc%d] card-detect GPIO %u, active level %u\n",
+			id, cd_gpio, host->hw->cd_level);
+	}
 
 	msdc_get_register_settings(host, np);
 
