@@ -560,8 +560,10 @@
  * AudDrv_GPIO_probe() gets, not the machine node.
  * "default" muxes the PMIC MTKIF audio pins (GPIO149/150/151) to their AUD
  * functions; stock did this in the DCT boot init.
- * The AW8736 amp SHDN is GPIO118. GPIO115 is the SM5414 charger enable;
- * audio must not touch it. */
+ * The speaker amplifier is an AW8738 enabled by GPIO100: stock drove it
+ * from its own aw8738 driver (ext_pa_aw8738, "en_pin" = GPIO100 output-high);
+ * the audgpio extamp states of the stock DTB (GPIO118) are not that pin.
+ * GPIO115 is the SM5414 charger enable; audio must not touch it. */
 &audgpio {
 	pinctrl-names = "default", "extamp-pullhigh", "extamp-pulllow";
 	pinctrl-0 = <&aud_pins_default>;
@@ -583,19 +585,21 @@
 			bias-pull-down;
 		};
 	};
-	/* Amp enable = GPIO118 (func0), as in the shipping DTB. The legacy code
-	 * path drives the pad directly and does not select these states. */
+	/* AW8738 enable = GPIO100 (func0), the stock ext_pa_aw8738 "en_pin";
+	 * AudDrv_GPIO_EXTAMP_Select() pulses it between these two states. */
 	aud_pins_extamp_high: audextamphigh {
 		pins_cmd_dat {
-			pins = <PINMUX_GPIO118__FUNC_GPIO118>;
+			pins = <PINMUX_GPIO100__FUNC_GPIO100>;
 			slew-rate = <1>;
+			bias-disable;
 			output-high;
 		};
 	};
 	aud_pins_extamp_low: audextamplow {
 		pins_cmd_dat {
-			pins = <PINMUX_GPIO118__FUNC_GPIO118>;
+			pins = <PINMUX_GPIO100__FUNC_GPIO100>;
 			slew-rate = <1>;
+			bias-disable;
 			output-low;
 		};
 	};
