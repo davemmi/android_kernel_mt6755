@@ -816,3 +816,18 @@
 		pins_cmd_dat { pins = <PINMUX_GPIO7__FUNC_GPIO7>; slew-rate = <1>; output-high; };
 	};
 };
+
+/* BTIF, the AP <-> CONSYS link (STP for Wi-Fi/BT/GPS/FM). The 4.9 btif
+ * driver maps its two AP-DMA channels from this node, reg/interrupts index
+ * 1 = TX DMA and 2 = RX DMA (hal_dma_set_default_setting()); the stock
+ * 3.18 DT keeps them in the separate btif_tx/btif_rx nodes. With only
+ * index 0 here the DMA bases stay 0 and the first STP open dies in
+ * hal_btif_dma_hw_init() on a NULL+0xc write (RX_DMA_RST). */
+&btif {
+	reg = <0x1100c000 0x1000>,	/* BTIF */
+	      <0x11000780 0x80>,	/* AP-DMA BTIF TX */
+	      <0x11000800 0x80>;	/* AP-DMA BTIF RX */
+	interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_LOW>,
+		     <GIC_SPI 111 IRQ_TYPE_LEVEL_LOW>,
+		     <GIC_SPI 116 IRQ_TYPE_LEVEL_LOW>;
+};
