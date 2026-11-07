@@ -48,6 +48,7 @@
  *                E X T E R N A L   R E F E R E N C E S
  *****************************************************************************/
 
+#include <linux/m3note_board.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -110,6 +111,7 @@ static void TurnOnDacPower(void);
 static void SetDcCompenSation(void);
 static void Voice_Amp_Change(bool enable);
 static void Speaker_Amp_Change(bool enable);
+static void Ext_Speaker_Amp_Change(bool enable);
 static bool TurnOnVOWADcPowerACC(int MicType, bool enable);
 
 static mt6331_Codec_Data_Priv *mCodec_data;
@@ -1841,8 +1843,15 @@ static void Speaker_Amp_Change(bool enable)
 		/* Set LOL gain as 0dB */
 
 		Apply_Speaker_Gain();
+		/* M5 Note: the speaker is the AW8738 on the line-out; the HAL
+		 * (SPK_PATH_LO) only switches Speaker_Amp, so the amp follows
+		 * the line-out here */
+		if (m3note_is_m1621())
+			Ext_Speaker_Amp_Change(true);
 	} else {
 		/* pr_debug("turn off Speaker_Amp_Change\n"); */
+		if (m3note_is_m1621())
+			Ext_Speaker_Amp_Change(false);
 #ifdef CONFIG_MTK_SPEAKER
 #if 0				/* MT6351 has no spk amp output , just LO */
 		if (Speaker_mode == AUDIO_SPEAKER_MODE_D)
