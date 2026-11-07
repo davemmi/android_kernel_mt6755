@@ -62,6 +62,9 @@ obj-y += mt_spm_pmic_wrap.o
 obj-y += mt_spm_sleep.o
 endif
 
+# mt_sleep.c asks the MT6755 audio driver whether FM keeps it awake
+ccflags-$(CONFIG_MT_SND_SOC_6755) += -I$(srctree)/sound/soc/mediatek/mt6755/
+
 ifeq ($(CONFIG_MACH_MT6757), y)
 #ccflags-y += -I$(srctree)/sound/soc/mediatek/mt_soc_audio_6757/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/power_gs_v1/

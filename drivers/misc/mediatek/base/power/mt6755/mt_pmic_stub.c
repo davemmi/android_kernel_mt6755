@@ -25,6 +25,7 @@
 #include <mach/upmu_sw.h>
 #include <mach/upmu_hw.h>
 #include <mt-plat/upmu_common.h>
+#include <mt-plat/mt_pmic_wrap.h>
 
 #ifdef CONFIG_MTK_PMIC_WRAP_HAL
 /*
@@ -373,11 +374,97 @@ static const struct forge_pmic_wl *forge_wl_row;
 static u32 forge_wl_reg, forge_wl_value;
 static bool forge_wl_armed;
 
+/*
+ * M5 Note audio codec (MT6351 AUDDEC/AUDENC/AFE), written by the MT6755
+ * audio driver's Ana_Set_Reg() through forge_audio_pwrap_write() below.
+ * Whole registers of the audio-only blocks pass; in shared registers only
+ * the audio fields may change (old ^ new), and the analog LDOs VA18/VUSB33
+ * may only be switched on under SW control, never off. Everything else
+ * stays dropped by the WACS2 gate. m1621 only, switch allow_audio.
+ */
+static bool forge_pmic_audio = true;
+module_param_named(allow_audio, forge_pmic_audio, bool, 0644);
+static unsigned int forge_pmic_audio_refused;
+module_param_named(audio_refused, forge_pmic_audio_refused, uint, 0444);
+static unsigned int forge_pmic_audio_last_refused;	/* adr << 16 | value */
+module_param_named(audio_last_refused, forge_pmic_audio_last_refused, uint, 0444);
+
+static bool forge_audio_reg_ok(u32 adr, u32 old, u32 val)
+{
+	u32 chg = old ^ val;
+
+	if ((adr >= 0x2000 && adr <= 0x20FE) ||	/* AFE_* (audio digital) */
+	    (adr >= 0x0CF2 && adr <= 0x0D32) ||	/* AUDDEC/AUDENC/AUDNCP */
+	    (adr >= 0x0800 && adr <= 0x080A) ||	/* ZCD_CON0..5 */
+	    (adr >= 0x09C2 && adr <= 0x09E8))	/* SPK_CON*, SPK_ANA_CON* */
+		return true;
+
+	switch (adr) {
+	case 0x7002:			/* DCXO_CW01: audio XO buffer */
+		return !(chg & ~0x8000);
+	case 0x029A:			/* TOP_CLKSQ: audio 26 MHz enable */
+		return !(chg & ~0x0001);
+	case 0x029C: case 0x029E:	/* TOP_CLKSQ_SET/_CLR */
+		return !(val & ~0x0001);
+	case 0x023A:			/* TOP_CKPDN_CON0: audio clocks */
+		return !(chg & ~0xF000);
+	case 0x023C: case 0x023E:	/* TOP_CKPDN_CON0_SET/_CLR */
+		return !(val & ~0xF000);
+	case 0x0230:			/* DRV_CON2: audio pad driving */
+		return !(chg & ~0x00F0);
+	case 0x0A00: case 0x0A16:	/* LDO_VA18_CON0, LDO_VUSB33_CON0 */
+		return !(chg & ~0x000A) && (val & 0x2) && !(val & 0x8);
+	}
+	return false;
+}
+
+static struct task_struct *forge_audio_owner;
+static u32 forge_audio_reg, forge_audio_value;
+static bool forge_audio_armed;
+
+static bool forge_pmic_audio_consume(u32 adr, u32 value)
+{
+	if (READ_ONCE(forge_audio_owner) != current ||
+	    !READ_ONCE(forge_audio_armed) ||
+	    READ_ONCE(forge_audio_reg) != adr ||
+	    READ_ONCE(forge_audio_value) != value)
+		return false;
+	WRITE_ONCE(forge_audio_armed, false);
+	return true;
+}
+
+/* The caller (Ana_Set_Reg) serialises audio writes with its own spinlock. */
+s32 forge_audio_pwrap_write(u32 adr, u32 old, u32 value)
+{
+	s32 ret;
+
+	if (!m3note_is_m1621() || !READ_ONCE(forge_pmic_audio) ||
+	    in_interrupt() || !forge_audio_reg_ok(adr, old, value)) {
+		forge_pmic_audio_refused++;
+		forge_pmic_audio_last_refused = (adr << 16) | (value & 0xffff);
+		if (forge_pmic_audio_refused == 1)
+			pr_warn("[FORGE_M681] audio: PMIC write adr=0x%04x 0x%04x -> 0x%04x refused (audio_refused counts)\n",
+				adr, old, value);
+		return -EPERM;
+	}
+	WRITE_ONCE(forge_audio_owner, current);
+	WRITE_ONCE(forge_audio_reg, adr);
+	WRITE_ONCE(forge_audio_value, value);
+	WRITE_ONCE(forge_audio_armed, true);
+	ret = pwrap_write(adr, value);
+	WRITE_ONCE(forge_audio_armed, false);
+	WRITE_ONCE(forge_audio_owner, NULL);
+	return ret;
+}
+EXPORT_SYMBOL(forge_audio_pwrap_write);
+
 /* Called under WACS2's spinlock. An IRQ or another task cannot use a token. */
 bool forge_pmic_adc_consume(u32 adr, u32 value)
 {
 	if (in_interrupt())
 		return false;
+	if (forge_pmic_audio_consume(adr, value))
+		return true;
 	if (READ_ONCE(forge_wl_owner) == current && READ_ONCE(forge_wl_armed) &&
 	    READ_ONCE(forge_wl_reg) == adr && READ_ONCE(forge_wl_value) == value) {
 		const struct forge_pmic_wl *wl = READ_ONCE(forge_wl_row);
