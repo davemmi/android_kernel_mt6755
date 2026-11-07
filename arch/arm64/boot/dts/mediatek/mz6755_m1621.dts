@@ -379,6 +379,53 @@
 	};
 };
 
+/* CONSYS (Wi-Fi/BT/GPS) pin states as in the stock M5 DT (consys@18070000:
+ * default + gps_lna_state_init/oh/ol on GPIO114). mtk_wmt_probe() needs a
+ * pinctrl-0: without it devm_pinctrl_get() fails with -ENODEV, the probe
+ * aborts after devm_clk_get("conn") and clk_scp_conn_main is left dangling,
+ * so the later clk_prepare_enable() never powers the CONN MTCMOS. Default
+ * holds the GPS LNA low like the stock init state. */
+&consys {
+	pinctrl-names = "default", "gps_lna_state_init", "gps_lna_state_oh",
+			"gps_lna_state_ol";
+	pinctrl-0 = <&m1621_gpslna_low>;
+	pinctrl-1 = <&m1621_gpslna_init>;
+	pinctrl-2 = <&m1621_gpslna_oh>;
+	pinctrl-3 = <&m1621_gpslna_ol>;
+};
+
+&pio {
+	m1621_gpslna_low: m1621_gpslna_low {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO114__FUNC_GPIO114>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+	m1621_gpslna_init: m1621_gpslna_init {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO114__FUNC_GPIO114>;
+			slew-rate = <0>;
+			bias-disable;
+			output-low;
+		};
+	};
+	m1621_gpslna_oh: m1621_gpslna_oh {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO114__FUNC_GPIO114>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+	m1621_gpslna_ol: m1621_gpslna_ol {
+		pins_cmd_dat {
+			pins = <PINMUX_GPIO114__FUNC_GPIO114>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+};
+
 /* Keypad as in the stock DCT (cust_kpd.dtsi): matrix pos0 = VOLDOWN,
  * pos1 = VOLUP, rstkey = HOME (102). The generic cust.dtsi maps only
  * VOLDOWN in the matrix and uses VOLUP as rstkey. */

@@ -636,8 +636,15 @@ static INT32 mtk_wmt_probe(struct platform_device *pdev)
 #if !defined(CONFIG_MTK_LEGACY)
 	consys_pinctrl = devm_pinctrl_get(&pdev->dev);
 	if (IS_ERR(consys_pinctrl)) {
-		WMT_PLAT_ERR_FUNC("cannot find consys pinctrl.\n");
-		return PTR_ERR(consys_pinctrl);
+		/* The pins only drive the GPS LNA (wmt_plat_gps_lna_ctrl()
+		 * copes with NULL). Failing the probe here would release the
+		 * devm clocks above and leave clk_scp_conn_main dangling: the
+		 * power-on's clk_prepare_enable() then returns 0 without ever
+		 * powering the CONN MTCMOS (seen on the M3 and M5 DTs without
+		 * consys pin states). Carry on without pinctrl. */
+		WMT_PLAT_ERR_FUNC("cannot find consys pinctrl (%ld), GPS LNA control off.\n",
+				  PTR_ERR(consys_pinctrl));
+		consys_pinctrl = NULL;
 	}
 #endif /* !defined(CONFIG_MTK_LEGACY) */
 
