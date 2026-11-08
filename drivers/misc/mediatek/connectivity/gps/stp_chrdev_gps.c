@@ -105,6 +105,17 @@ bool rtc_GPS_low_power_detected(void)
 		return false;
 	}
 }
+/* per-open traffic counters, printed on close: does the GPS core answer? */
+static unsigned int forge_gps_wr_bytes, forge_gps_wr_calls, forge_gps_wr_zero;
+static unsigned int forge_gps_rd_bytes, forge_gps_rd_calls, forge_gps_rd_sig;
+static bool forge_gps_wr_dumped, forge_gps_rd_dumped;
+
+static void forge_gps_dump(const char *what, const unsigned char *b, int n)
+{
+	pr_info("[FORGE_GPS] first %s (%d bytes): %*ph\n", what, n,
+		min(n, 24), b);
+}
+
 ssize_t GPS_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	int retval = 0;
@@ -152,7 +163,14 @@ ssize_t GPS_write(struct file *filp, const char __user *buf, size_t count, loff_
 		   // George: FIXME! Move GPS retry handling from app to driver
 		   }
 		 */
+		forge_gps_wr_calls++;
+		forge_gps_wr_bytes += written > 0 ? written : 0;
+		if (!forge_gps_wr_dumped) {
+			forge_gps_wr_dumped = true;
+			forge_gps_dump("write", &o_buf[0], copy_size);
+		}
 		if (0 == written) {
+			forge_gps_wr_zero++;
 			retval = -ENOSPC;
 			/*no windowspace in STP is available,
 			native process should not call GPS_write with no delay at all */
@@ -208,6 +226,7 @@ ssize_t GPS_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 #endif
 		/* if we are signaled */
 		if (val) {
+			forge_gps_rd_sig++;
 			if (-ERESTARTSYS == val)
 				GPS_DBG_FUNC("signaled by -ERESTARTSYS(%ld)\n ", val);
 			else
@@ -217,6 +236,14 @@ ssize_t GPS_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 		}
 	}
 
+	if (retval > 0) {
+		forge_gps_rd_calls++;
+		forge_gps_rd_bytes += retval;
+		if (!forge_gps_rd_dumped) {
+			forge_gps_rd_dumped = true;
+			forge_gps_dump("read", i_buf, retval);
+		}
+	}
 #if GPS_DEBUG_DUMP
 	{
 		unsigned char *buf_ptr = &i_buf[0];
@@ -291,7 +318,7 @@ long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/*get combo hw version from ic,  without wmt mapping */
 		hw_version = mtk_wcn_wmt_ic_info_get(WMTCHIN_HWVER);
 
-		GPS_DBG_FUNC("GPS_ioctl(): get hw version = 0x%x\n", hw_version);
+		pr_info("[FORGE_GPS] ic hw version 0x%x\n", hw_version);
 		if (copy_to_user((int __user *)arg, &hw_version, sizeof(hw_version)))
 			retval = -EFAULT;
 
@@ -301,7 +328,7 @@ long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/*get combo fw version from ic, without wmt mapping */
 		fw_version = mtk_wcn_wmt_ic_info_get(WMTCHIN_FWVER);
 
-		GPS_DBG_FUNC("GPS_ioctl(): get fw version = 0x%x\n", fw_version);
+		pr_info("[FORGE_GPS] ic fw version 0x%x\n", fw_version);
 		if (copy_to_user((int __user *)arg, &fw_version, sizeof(fw_version)))
 			retval = -EFAULT;
 
@@ -427,6 +454,9 @@ static int GPS_open(struct inode *inode, struct file *file)
 #if defined(CONFIG_ARCH_MT6580)
 	clk_buf_ctrl(CLK_BUF_AUDIO, 1);
 #endif
+	forge_gps_wr_bytes = forge_gps_wr_calls = forge_gps_wr_zero = 0;
+	forge_gps_rd_bytes = forge_gps_rd_calls = forge_gps_rd_sig = 0;
+	forge_gps_wr_dumped = forge_gps_rd_dumped = false;
 	/* init_MUTEX(&wr_mtx); */
 	sema_init(&wr_mtx, 1);
 	/* init_MUTEX(&rd_mtx); */
@@ -445,6 +475,10 @@ static int GPS_close(struct inode *inode, struct file *file)
 		return -EPERM;
 	}
 
+	pr_info("[FORGE_GPS] close (pid %d): wrote %u bytes in %u calls (%u with no STP window), read %u bytes in %u calls (%u signalled)\n",
+		current->pid, forge_gps_wr_bytes, forge_gps_wr_calls,
+		forge_gps_wr_zero, forge_gps_rd_bytes, forge_gps_rd_calls,
+		forge_gps_rd_sig);
 	/*Flush Rx Queue */
 	mtk_wcn_stp_register_event_cb(GPS_TASK_INDX, 0x0);	/* unregister event callback function */
 	mtk_wcn_wmt_msgcb_unreg(WMTDRV_TYPE_GPS);
