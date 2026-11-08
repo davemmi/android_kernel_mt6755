@@ -37,6 +37,7 @@
 ********************************************************************************
 */
 #include <linux/delay.h>
+#include <linux/gpio.h>
 
 /* ALPS header files */
 /* #include <mach/mtk_rtc.h> */
@@ -748,12 +749,13 @@ static INT32 wmt_plat_gps_lna_ctrl(ENUM_PIN_STATE state)
 	switch (state) {
 	case PIN_STA_INIT:
 	case PIN_STA_DEINIT:
-		pinctrl_select_state(consys_pinctrl, gps_lna_init);
-		WMT_PLAT_DBG_FUNC("set gps lna to init\n");
+		pr_info("[FORGE_GPS] LNA GPIO init (low): select %d\n",
+			pinctrl_select_state(consys_pinctrl, gps_lna_init));
 		break;
 	case PIN_STA_OUT_H:
-		pinctrl_select_state(consys_pinctrl, gps_lna_oh);
-		WMT_PLAT_DBG_FUNC("set gps lna to oh\n");
+		pr_info("[FORGE_GPS] LNA GPIO high: select %d, gpio %d\n",
+			pinctrl_select_state(consys_pinctrl, gps_lna_oh),
+			gpio_get_value(114));
 		break;
 	case PIN_STA_OUT_L:
 		pinctrl_select_state(consys_pinctrl, gps_lna_ol);

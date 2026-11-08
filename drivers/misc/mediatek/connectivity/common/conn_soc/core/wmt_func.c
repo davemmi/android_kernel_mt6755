@@ -411,6 +411,11 @@ INT32 wmt_func_gps_pre_ctrl(P_WMT_IC_OPS pOps, P_WMT_GEN_CONF pConf, ENUM_FUNC_S
 	}
 	WMT_INFO_FUNC("ctrl combo chip gps sync function succeed\n");
 	/* turn on GPS lna ctrl function */
+	pr_info("[FORGE_GPS] pre_ctrl %s: conf %s, lna_enable %d, lna_pin %d, co_clock 0x%x\n",
+		FUNC_ON == funcStatus ? "on" : "off", pConf ? "loaded" : "NULL",
+		pConf ? pConf->wmt_gps_lna_enable : -1,
+		pConf ? pConf->wmt_gps_lna_pin : -1,
+		pConf ? pConf->co_clock_flag : 0);
 	if (NULL != pConf) {
 		if (0 == pConf->wmt_gps_lna_enable) {
 
