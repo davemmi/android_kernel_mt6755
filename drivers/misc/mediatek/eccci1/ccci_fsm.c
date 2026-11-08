@@ -11,6 +11,7 @@
  * GNU General Public License for more details.
  */
 
+#include <linux/moduleparam.h>
 #include "ccci_core.h"
 #include "ccci_modem.h"
 #include "mdee_ctl.h"
@@ -178,6 +179,15 @@ static void ccci_routine_exception(struct ccci_fsm_ctl *ctl, struct ccci_fsm_com
 		ccci_fsm_finish_command(md, cmd, 1);
 }
 
+/*
+ * m1621 bring-up: modem start stays off until forge_md_allow_start=1.
+ * Refuse here, before the FSM leaves GATED: a failing ccci_md_start() is
+ * handled as a boot handshake timeout whose register dump touches the
+ * unpowered modem (NULL deref in ccci_util_mem_dump, boot_ccci2).
+ */
+bool forge_md_allow_start;
+module_param(forge_md_allow_start, bool, 0644);
+
 static void ccci_routine_start(struct ccci_fsm_ctl *ctl, struct ccci_fsm_command *cmd)
 {
 	int ret;
@@ -186,6 +196,12 @@ static void ccci_routine_start(struct ccci_fsm_ctl *ctl, struct ccci_fsm_command
 	struct ccci_fsm_event *event, *next;
 	unsigned long flags;
 
+	if (!forge_md_allow_start) {
+		pr_err("[FORGE_CCCI] md%d start refused in FSM (forge_md_allow_start=0)\n",
+		       md->index + 1);
+		ccci_fsm_finish_command(md, cmd, -1);
+		return;
+	}
 	/* 1. state sanity check */
 	if (ctl->curr_state == CCCI_FSM_READY)
 		goto success;
