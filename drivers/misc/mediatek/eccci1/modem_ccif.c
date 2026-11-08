@@ -488,7 +488,7 @@ static irqreturn_t md_ccif_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int md_ccif_op_broadcast_state(struct ccci_modem *md, MD_STATE state)
+static int md_ccif_op_broadcast_state(struct ccci_modem *md, enum MD_STATE state)
 {
 	int i;
 	struct ccci_port *port;
