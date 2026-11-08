@@ -51,6 +51,7 @@
 static struct clk *clk_scp_sys_md1_main;
 #endif
 static struct pinctrl *mdcldma_pinctrl;
+void forge_md1_pmic_dump(const char *when);
 void __attribute__((weak)) clk_buf_set_by_flightmode(bool is_flightmode_on)
 {
 }
@@ -145,6 +146,7 @@ int md_cd_get_modem_hw_info(struct platform_device *dev_ptr, struct ccci_dev_cfg
 							dev_cfg->index + 1, PTR_ERR(mdcldma_pinctrl));
 			mdcldma_pinctrl = NULL;
 		}
+		forge_md1_pmic_dump("at probe");
 		clk_scp_sys_md1_main = devm_clk_get(&dev_ptr->dev, "scp-sys-md1-main");
 		if (IS_ERR(clk_scp_sys_md1_main)) {
 			CCCI_ERROR_LOG(dev_cfg->index, TAG, "modem %d get scp-sys-md1-main failed\n",
@@ -469,6 +471,26 @@ void md1_pmic_setting_off(void)
 	pmic_set_register_value(MT6351_PMIC_BUCK_VSRAM_MD_EN, 0); /* 0x0654[0]=0, 0:Disable, 1:Enable */
 }
 
+/* m1621 bring-up: read-only view of the MD1 bucks (MT6351), logged at
+ * probe and around power-on to see what LK left and what stock writes. */
+void forge_md1_pmic_dump(const char *when)
+{
+	pr_err("[FORGE_CCCI] MD1 bucks %s: VSRAM_MD en %u slp %u ctrl %u vosel_on 0x%02x | VMD1 en %u slp %u ctrl %u vosel_on 0x%02x | VMODEM en %u slp %u ctrl %u vosel_on 0x%02x\n",
+	       when,
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VSRAM_MD_EN),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VSRAM_MD_VSLEEP_EN),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VSRAM_MD_VOSEL_CTRL),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VSRAM_MD_VOSEL_ON),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMD1_EN),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMD1_VSLEEP_EN),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMD1_VOSEL_CTRL),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMD1_VOSEL_ON),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMODEM_EN),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMODEM_VSLEEP_EN),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMODEM_VOSEL_CTRL),
+	       pmic_get_register_value(MT6351_PMIC_BUCK_VMODEM_VOSEL_ON));
+}
+
 void md1_pmic_setting_on(void)
 {
 	/* VSRAM_MD on */
@@ -726,7 +748,9 @@ int md_cd_power_on(struct ccci_modem *md)
 		CCCI_BOOTUP_LOG(md->index, TAG, "bps_bsi_slv1 map fail\n");
 
 	/* step 0: PMIC setting */
+	forge_md1_pmic_dump("before power-on");
 	md1_pmic_setting_on();
+	forge_md1_pmic_dump("after pmic setting");
 
 	/* steip 1: power on MD_INFRA and MODEM_TOP */
 	switch (md->index) {
