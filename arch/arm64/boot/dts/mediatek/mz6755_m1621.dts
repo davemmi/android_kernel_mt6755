@@ -845,6 +845,13 @@
 		     <GIC_SPI 116 IRQ_TYPE_LEVEL_LOW>;
 };
 
+/* The MTK sensor framework's EINT placeholder (cust.dtsi: EINT4 level-high)
+ * has no driver here, but its platform device maps hwirq 4 first and the
+ * icm20608 client then fails with "type mismatch" (irq 0). */
+&gyro {
+	status = "disabled";
+};
+
 /* ICM-20608-D INT: GPIO4 as EINT4 input, pull-down (stock gyropincfg). */
 &pio {
 	icm20608_int_default: icm20608_int_default {

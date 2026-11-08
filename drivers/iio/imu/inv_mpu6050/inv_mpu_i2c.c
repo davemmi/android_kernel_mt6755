@@ -17,6 +17,7 @@
 #include <linux/i2c.h>
 #include <linux/iio/iio.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include "inv_mpu_iio.h"
 
 static const struct regmap_config inv_mpu_regmap_config = {
@@ -125,6 +126,21 @@ static int inv_mpu_probe(struct i2c_client *client,
 		return result;
 
 	st = iio_priv(dev_get_drvdata(&client->dev));
+	/*
+	 * The bypass mux registers an extra i2c adapter with a dynamic bus
+	 * number. On the M5 Note it took i2c-3 before the MT6311 extbuck bus
+	 * was added late, which turned voltage DVFS off. As in later mainline,
+	 * only create it when the DT describes an "i2c-gate" child.
+	 */
+	if (client->dev.of_node) {
+		struct device_node *gate =
+			of_get_child_by_name(client->dev.of_node, "i2c-gate");
+
+		if (!gate)
+			return 0;
+		of_node_put(gate);
+	}
+
 	st->muxc = i2c_mux_alloc(client->adapter, &client->dev,
 				 1, 0, I2C_MUX_LOCKED,
 				 inv_mpu6050_select_bypass,
@@ -156,8 +172,10 @@ static int inv_mpu_remove(struct i2c_client *client)
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct inv_mpu6050_state *st = iio_priv(indio_dev);
 
-	inv_mpu_acpi_delete_mux_client(client);
-	i2c_mux_del_adapters(st->muxc);
+	if (st->muxc) {
+		inv_mpu_acpi_delete_mux_client(client);
+		i2c_mux_del_adapters(st->muxc);
+	}
 
 	return inv_mpu_core_remove(&client->dev);
 }
