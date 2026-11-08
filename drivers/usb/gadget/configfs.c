@@ -1722,8 +1722,10 @@ void usb_state_monitor_work(void)
 		msecs_to_jiffies(USB_STATE_MONITOR_DELAY));
 }
 
-/* M1621 charger: has a USB host talked to the gadget (a SETUP request, or
- * a configuration) since the last disconnect? A wall charger never does. */
+/* M1621 charger: has a USB host configured the gadget (SET_CONFIGURATION)
+ * since the last disconnect? A wall charger never does. A bare SETUP
+ * (gi->connected) is not enough: on a charger it was seen 2 s after the
+ * 2 A step, with VBUS sagging to 4.5 V. */
 bool forge_usb_gadget_host_seen(void)
 {
 	struct gadget_info *gi;
@@ -1736,7 +1738,7 @@ bool forge_usb_gadget_host_seen(void)
 	if (!gi)
 		return false;
 	spin_lock_irqsave(&gi->cdev.lock, flags);
-	seen = gi->connected || gi->cdev.config;
+	seen = gi->cdev.config != NULL;
 	spin_unlock_irqrestore(&gi->cdev.lock, flags);
 	return seen;
 }

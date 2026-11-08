@@ -629,8 +629,8 @@ static int bq25890_m1621_temp_guard(struct bq25890_device *bq, bool online)
  * M1621 input current. The BQ25892 D+/D- pins are not on the USB lines
  * here (it reports "SDP" for a wall charger too; stock disables its
  * detection and uses the MT6351 BC1.2 block). So the source is told by the
- * USB gadget: a host sends SETUP requests within a second or two, a
- * charger never does. Input limit 500 mA while online until
+ * USB gadget: a host configures it within a second or two, a charger
+ * never does. Input limit 500 mA while online until
  * BQ25890_M1621_HOST_WAIT_MS have passed with no host; then 2 A (the ILIM
  * pin still caps it in hardware, VINDPM backs off on a weak source). A
  * host seen later drops it back to 500 mA, unplugging resets.
