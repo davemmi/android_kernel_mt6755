@@ -1722,6 +1722,26 @@ void usb_state_monitor_work(void)
 		msecs_to_jiffies(USB_STATE_MONITOR_DELAY));
 }
 
+/* M1621 charger: has a USB host talked to the gadget (a SETUP request, or
+ * a configuration) since the last disconnect? A wall charger never does. */
+bool forge_usb_gadget_host_seen(void)
+{
+	struct gadget_info *gi;
+	unsigned long flags;
+	bool seen;
+
+	if (IS_ERR_OR_NULL(android_device))
+		return false;
+	gi = dev_get_drvdata(android_device);
+	if (!gi)
+		return false;
+	spin_lock_irqsave(&gi->cdev.lock, flags);
+	seen = gi->connected || gi->cdev.config;
+	spin_unlock_irqrestore(&gi->cdev.lock, flags);
+	return seen;
+}
+EXPORT_SYMBOL(forge_usb_gadget_host_seen);
+
 #define DESCRIPTOR_STRING_ATTR(field, buffer)	\
 static ssize_t	\
 field ## _show(struct device *dev, struct device_attribute *attr,	\
