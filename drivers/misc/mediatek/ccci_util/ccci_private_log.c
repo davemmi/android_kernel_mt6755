@@ -876,6 +876,14 @@ void ccci_util_mem_dump(int md_id, int buf_type, void *start_addr, int len)
 	int tail_num = len % 16;
 	char buf[16];
 	int i, j;
+	/* m1621: dumps of an unmapped modem block pass NULL + offset
+	 * (cldma_dump_register, boot_ccci2 Oops at 0x10); skip instead of
+	 * faulting. Plain NULL keeps the message below. */
+	if (start_addr != NULL && (unsigned long)start_addr < PAGE_SIZE) {
+		pr_err("[FORGE_CCCI] mem dump of unmapped base %p skipped (md%d, len %d)\n",
+		       start_addr, md_id + 1, len);
+		return;
+	}
 
 	if (curr_p == NULL) {
 		ccci_dump_write(md_id, buf_type, 0, "start_addr <NULL>\n");

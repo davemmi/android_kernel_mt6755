@@ -261,6 +261,14 @@ static bool forge_pmic_conn_vosel = true;
 module_param_named(allow_conn_vosel, forge_pmic_conn_vosel, bool, 0644);
 module_param_named(allow_msdc1, forge_pmic_sd, bool, 0644);
 
+/* M5 Note MD1 (eccci1/mt6755 md1_pmic_setting_on/off, MT6351 branch of the
+ * 3.18 M3 kernel): VSRAM_MD, VMD1 and VMODEM bucks, EN / VSLEEP_EN /
+ * VOSEL_CTRL and the stock VOSEL_ON codes only (VSRAM_MD 0x40 E1 1.0 V or
+ * 0x50 E2 1.1 V, VMODEM 0x40 1.0 V). m1621 only; off by default, the modem
+ * start is gated separately (ccci.forge_md_allow_start). */
+static bool forge_pmic_md1;
+module_param_named(allow_md1, forge_pmic_md1, bool, 0644);
+
 struct forge_pmic_wl {
 	u16 reg;
 	u8 mask, shift;		/* the field */
@@ -309,6 +317,17 @@ static const struct forge_pmic_wl forge_pmic_wl[] = {
 	{ 0x0AFC, 0x7, 8, 3, 3, &forge_pmic_cam_front, "VGP3_ANA_CON0 VOSEL (1.22 V, front DVDD)", true, true },
 	{ 0x0A3A, 0x1, 1, 0, 1, &forge_pmic_vibr, "LDO_VIBR_CON0 EN (vibrator)", true, true, true },
 	{ 0x0AE6, 0x7, 8, 5, 5, &forge_pmic_vibr, "VIBR_ANA_CON0 VOSEL (vibrator)", true, true },
+	{ 0x0654, 0x1, 0, 0, 1, &forge_pmic_md1, "BUCK_VSRAM_MD_CON2 EN (MD1)", true },
+	{ 0x0662, 0x1, 8, 0, 1, &forge_pmic_md1, "BUCK_VSRAM_MD_CON9 VSLEEP_EN (MD1)", true },
+	{ 0x065A, 0x7F, 0, 0x40, 0x50, &forge_pmic_md1, "BUCK_VSRAM_MD_CON5 VOSEL_ON (1.0/1.1 V, MD1)", true },
+	{ 0x0650, 0x1, 1, 0, 1, &forge_pmic_md1, "BUCK_VSRAM_MD_CON0 VOSEL_CTRL (MD1)", true },
+	{ 0x0640, 0x1, 0, 0, 1, &forge_pmic_md1, "BUCK_VMD1_CON2 EN (MD1)", true },
+	{ 0x064E, 0x1, 8, 0, 1, &forge_pmic_md1, "BUCK_VMD1_CON9 VSLEEP_EN (MD1)", true },
+	{ 0x063C, 0x1, 1, 0, 1, &forge_pmic_md1, "BUCK_VMD1_CON0 VOSEL_CTRL (MD1)", true },
+	{ 0x062C, 0x1, 0, 0, 1, &forge_pmic_md1, "BUCK_VMODEM_CON2 EN (MD1)", true },
+	{ 0x063A, 0x1, 8, 0, 1, &forge_pmic_md1, "BUCK_VMODEM_CON9 VSLEEP_EN (MD1)", true },
+	{ 0x0632, 0x7F, 0, 0x40, 0x40, &forge_pmic_md1, "BUCK_VMODEM_CON5 VOSEL_ON (1.0 V, MD1)", true },
+	{ 0x0628, 0x1, 1, 0, 1, &forge_pmic_md1, "BUCK_VMODEM_CON0 VOSEL_CTRL (MD1)", true },
 	{ 0x0A2E, 0x1, 1, 0, 1, &forge_pmic_sd, "LDO_VMCH_CON0 EN (microSD)", false, false, true },
 	{ 0x0ACE, 0x1, 8, 0, 0, &forge_pmic_sd, "VMCH_ANA_CON0 VOSEL (3.0 V microSD)", false },
 	{ 0x0AAA, 0x1, 1, 0, 1, &forge_pmic_sd, "LDO_VMC_CON0 EN (microSD)", false, false, true },
@@ -349,6 +368,9 @@ static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 		* VOSEL_CTRL); the writer in mt_extbuck_probe still needs
 		* forge_pmic_vstep_allowed() and its rail guard */
 	       (wl->allow == &forge_vstep_allow &&
+		of_machine_is_compatible("meizu,m1621")) ||
+	       /* MD1 bucks: M5 Note only (its stock eccci MT6351 branch) */
+	       (wl->allow == &forge_pmic_md1 &&
 		of_machine_is_compatible("meizu,m1621"));
 }
 
