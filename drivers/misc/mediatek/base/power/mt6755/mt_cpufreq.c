@@ -455,14 +455,16 @@ static bool forge_l681_efuse_fy(void)
 		(((eng >> 4) & 0x07) == 2 || ((eng >> 10) & 0x07) == 2));
 }
 
-/* boards whose rails this build drives: m681, and l681 (same MT6311 on
- * i2c-3 0x6b, same PL state, same stock FY table) only when its efuse
- * matches the stock FY ladder; else it stays frequency-only */
+/* boards whose rails this build drives: m681, and l681 / m1621 (same
+ * MT6311 on i2c-3 0x6b, same PL state, same stock FY table; m1621 read
+ * back chip id 0x0120, VPROC 0x40, VSRAM 0x50, both VOSEL_CTRL 0) only
+ * when the efuse matches the stock FY ladder; else frequency-only */
 static bool forge_full_dvfs_board(void)
 {
 	if (of_machine_is_compatible("meizu,m681"))
 		return true;
-	return m3note_board_is(M3NOTE_BOARD_L681) && forge_l681_efuse_fy();
+	return (m3note_board_is(M3NOTE_BOARD_L681) || m3note_is_m1621()) &&
+	       forge_l681_efuse_fy();
 }
 
 
@@ -515,16 +517,18 @@ static unsigned int _mt_cpufreq_get_cpu_level(void)
 	 * are the same in every ladder.
 	 */
 	/*
-	 * m1621 (M5 Note): MT6351 + MT6311 at i2c-3 0x6b (chip id 0x0120) like
-	 * m681, LK leaves VPROC at 0x40 = 1.000 V. Its efuse bin is not
-	 * checked against stock, so it runs frequency-only like an l681 that
-	 * fails the FY rule; level 1 only picks the table, the rows legal at
-	 * 1.000 V are the same in every ladder.
+	 * m1621 (M5 Note, stock big 1.8 GHz): MT6351 + MT6311 at i2c-3 0x6b
+	 * (chip id 0x0120) like m681, LK leaves VPROC at 0x40 = 1.000 V. As on
+	 * l681 the stock efuse rule decides whether the rails are driven
+	 * (forge_full_dvfs_board()); the table is FY either way, and the rows
+	 * legal at 1.000 V are the same in every ladder.
 	 */
 	if (m3note_is_m1621()) {
-		pr_info_once("[FORGE_M1621] cpufreq: level 1 (FY) fixed, frequency-only; efuse 21 func_code_0 0x%x, 19 binLevel_eng 0x%x (stock rule says %s)\n",
-			     func_code_0, binLevel_eng,
-			     forge_l681_efuse_fy() ? "FY" : "SB");
+		bool fy = forge_l681_efuse_fy();
+
+		pr_info_once("[FORGE_M1621] cpufreq: level 1 (FY) fixed; stock rule on efuse 21 func_code_0 0x%x, 19 binLevel_eng 0x%x -> %s (%s)\n",
+			     func_code_0, binLevel_eng, fy ? "FY" : "SB",
+			     fy ? "voltage DVFS allowed" : "frequency-only");
 		return CPU_LEVEL_1;
 	}
 	if (m3note_board_is(M3NOTE_BOARD_L681)) {
@@ -5317,8 +5321,9 @@ static void forge_dvfs_arm(void)
 	if (done || !FORGE_M681_FULL_DVFS)
 		return;
 	if (!forge_full_dvfs_board()) {
-		if (m3note_board_is(M3NOTE_BOARD_L681))
-			pr_err("[FORGE_DVFS] l681: efuse does NOT match the stock FY ladder - no voltage DVFS, freq-only at the PL rail\n");
+		if (m3note_board_is(M3NOTE_BOARD_L681) || m3note_is_m1621())
+			pr_err("[FORGE_DVFS] %s: efuse does NOT match the stock FY ladder - no voltage DVFS, freq-only at the PL rail\n",
+			       m3note_is_m1621() ? "m1621" : "l681");
 		return;
 	}
 	done = true;
@@ -5513,8 +5518,6 @@ static DECLARE_DELAYED_WORK(forge_mt_cpufreq_autoarm_work,
 static int __init _mt_cpufreq_pdrv_init(void)
 {
 	pr_info("[FORGE_CPUFREQ] built (freq-only, clamped); arm: echo 1 > /sys/module/mt_cpufreq/parameters/forge_mt_cpufreq\n");
-	/* m1621: never voltage DVFS (forge_full_dvfs_board() is false), the
-	 * MT6311 VPROC stays at the 1.000 V LK left */
 	if (of_machine_is_compatible("meizu,m681") ||
 	    m3note_board_is(M3NOTE_BOARD_L681) || m3note_is_m1621())
 		schedule_delayed_work(&forge_mt_cpufreq_autoarm_work,

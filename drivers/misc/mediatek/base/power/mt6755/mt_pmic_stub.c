@@ -330,7 +330,7 @@ static const struct forge_pmic_wl *forge_pmic_wl_row(u32 reg, u32 mask,
 }
 
 /* every row on m681; marked l681 rows also on l681 (DT). M1621 receives
- * only its stock vibrator fields and the narrowly scoped MSDC1 rail fields. */
+ * its stock vibrator, MSDC1, connsys and VSRAM_PROC (CPU DVFS) fields. */
 static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 {
 	return of_machine_is_compatible("meizu,m681") ||
@@ -344,6 +344,11 @@ static bool forge_pmic_wl_board(const struct forge_pmic_wl *wl)
 		* WIFI_RAM_CODE_6755, WMT_SOC.cfg); EN/ON_CTRL rows only */
 	       ((wl->allow == &forge_pmic_conn ||
 		 wl->allow == &forge_pmic_conn_vosel) &&
+		of_machine_is_compatible("meizu,m1621")) ||
+	       /* CPU DVFS: the three VSRAM_PROC rows (VOSEL_ON, VOSEL_SLEEP,
+		* VOSEL_CTRL); the writer in mt_extbuck_probe still needs
+		* forge_pmic_vstep_allowed() and its rail guard */
+	       (wl->allow == &forge_vstep_allow &&
 		of_machine_is_compatible("meizu,m1621"));
 }
 
@@ -597,8 +602,11 @@ out:
 
 bool forge_pmic_vstep_allowed(void)
 {
+	/* m1621: same MT6351 VSRAM_PROC rows and the same LK state (0x06A0 0,
+	 * 0x06A8/AA/AC 0x50) as m681/l681 */
 	return forge_vstep_allow && (of_machine_is_compatible("meizu,m681") ||
-				     m3note_board_is(M3NOTE_BOARD_L681));
+				     m3note_board_is(M3NOTE_BOARD_L681) ||
+				     m3note_is_m1621());
 }
 
 /* owned RMW of one listed field; the DVFS callers pause and read back */
