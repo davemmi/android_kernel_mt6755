@@ -862,7 +862,7 @@ static irqreturn_t md_ccif_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int md_ccif_op_broadcast_state(struct ccci_modem *md, MD_STATE state)
+static int md_ccif_op_broadcast_state(struct ccci_modem *md, enum MD_STATE state)
 {
 	/*only for thoes states which are updated by port_kernel.c */
 	switch (state) {
@@ -1629,7 +1629,7 @@ static int md_ccif_probe(struct platform_device *dev)
 	md_ctrl = (struct md_ccif_ctrl *)md->private_data;
 	md_ctrl->hw_info = md_hw;
 	snprintf(md_ctrl->wakelock_name, sizeof(md_ctrl->wakelock_name), "md%d_ccif_trm", md_id + 1);
-	wake_lock_init(&md_ctrl->trm_wake_lock, WAKE_LOCK_SUSPEND, md_ctrl->wakelock_name);
+	wakeup_source_init(&md_ctrl->trm_wake_lock, md_ctrl->wakelock_name);
 	tasklet_init(&md_ctrl->ccif_irq_task, md_ccif_irq_tasklet, (unsigned long)md);
 	INIT_WORK(&md_ctrl->ccif_sram_work, md_ccif_sram_rx_work);
 	init_timer(&md_ctrl->traffic_monitor);

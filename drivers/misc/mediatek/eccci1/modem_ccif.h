@@ -17,7 +17,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/dmapool.h>
 #include <linux/atomic.h>
-#include <mt-plat/mt_ccci_common.h>
+#include <mt-plat/mtk_ccci_common.h>
 #include "ccci_config.h"
 #include "ccci_ringbuf.h"
 #include "ccci_core.h"
@@ -72,7 +72,7 @@ struct md_ccif_ctrl {
 	unsigned int md_wdt_irq_id;
 	unsigned int sram_size;
 	struct ccif_sram_layout *ccif_sram_layout;
-	struct wake_lock trm_wake_lock;
+	struct wakeup_source trm_wake_lock;
 	char wakelock_name[32];
 	struct work_struct ccif_sram_work;
 	struct tasklet_struct ccif_irq_task;
@@ -152,7 +152,7 @@ static inline void ccif_wake_up_tx_queue(struct ccci_modem *md, unsigned int qno
 	wake_up(&queue->req_wq);
 }
 
-static inline int ccif_queue_broadcast_state(struct ccci_modem *md, MD_STATE state, DIRECTION dir, int index)
+static inline int ccif_queue_broadcast_state(struct ccci_modem *md, unsigned int state, DIRECTION dir, int index)
 {
 	ccci_md_status_notice(md, dir, -1, index, state);
 	return 0;
