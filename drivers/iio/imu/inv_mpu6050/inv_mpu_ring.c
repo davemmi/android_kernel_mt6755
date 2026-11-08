@@ -122,7 +122,7 @@ irqreturn_t inv_mpu6050_read_fifo(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct inv_mpu6050_state *st = iio_priv(indio_dev);
-	size_t bytes_per_datum;
+	size_t bytes_per_datum, i;
 	int result;
 	u8 data[INV_MPU6050_OUTPUT_DATA_SIZE];
 	u16 fifo_count;
@@ -160,10 +160,19 @@ irqreturn_t inv_mpu6050_read_fifo(int irq, void *p)
 	    fifo_count / bytes_per_datum + INV_MPU6050_TIME_STAMP_TOR)
 		goto flush_fifo;
 	while (fifo_count >= bytes_per_datum) {
-		result = regmap_bulk_read(st->map, st->reg->fifo_r_w,
-					  data, bytes_per_datum);
-		if (result)
-			goto flush_fifo;
+		/*
+		 * The MT6755 i2c controller moves at most 8 bytes without DMA
+		 * ("non-WRRD trans_len is wrong"), so read the datum one 3-axis
+		 * sensor (6 bytes) at a time; FIFO_R_W keeps popping bytes.
+		 */
+		for (i = 0; i < bytes_per_datum;
+		     i += INV_MPU6050_BYTES_PER_3AXIS_SENSOR) {
+			result = regmap_bulk_read(st->map, st->reg->fifo_r_w,
+					data + i,
+					INV_MPU6050_BYTES_PER_3AXIS_SENSOR);
+			if (result)
+				goto flush_fifo;
+		}
 
 		result = kfifo_out(&st->timestamps, &timestamp, 1);
 		/* when there is no timestamp, put timestamp as 0 */
