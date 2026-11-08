@@ -118,6 +118,7 @@ struct bq25890_device {
 	struct delayed_work state_work;
 	bool poll_mode;
 	bool m1621_thermal_guard;
+	int m1621_vbus_type;	/* last REG0B VBUS_STAT acted on, -1 none */
 	bool charge_enabled;
 	enum bq25890_temp_guard_state temp_guard_state;
 };
@@ -623,6 +624,61 @@ static int bq25890_m1621_temp_guard(struct bq25890_device *bq, bool online)
 	return write_ret;
 }
 
+/*
+ * M1621 input current by source type. hw_init leaves the safe DT limit
+ * (500 mA input); the D+/D- detection result (REG0B VBUS_STAT) then picks
+ * the input limit, as stock does: USB host 500 mA, charging downstream
+ * port 1.5 A, dedicated charger 2 A, an unknown or non-standard adapter
+ * 1 A. The ILIM pin still caps it in hardware, the charge current (DT) is
+ * the battery side. Every change and the register state go to the log.
+ */
+static const char * const bq25890_vbus_names[] = {
+	"none", "USB host (SDP)", "CDP", "charger (DCP)", "MaxCharge",
+	"unknown adapter", "non-standard adapter", "OTG"
+};
+
+static void bq25890_m1621_input(struct bq25890_device *bq, bool online)
+{
+	static const u32 iilim_ua[] = {
+		500000, 500000, 1500000, 2000000, 2000000, 1000000, 1000000, 0
+	};
+	int type, ret, ichgr, vbus, regs[5], i;
+	static const u8 dump[] = { 0x00, 0x02, 0x04, 0x0B, 0x0C };
+	u32 ua;
+
+	if (!bq->m1621_thermal_guard)
+		return;
+	if (!online) {
+		bq->m1621_vbus_type = -1;
+		return;
+	}
+	type = bq25890_field_read(bq, F_VBUS_STAT);
+	if (type < 0 || type == bq->m1621_vbus_type)
+		return;
+	ua = iilim_ua[type & 7];
+	if (!ua)	/* OTG: not an input */
+		return;
+	ret = bq25890_field_write(bq, F_IILIM,
+				  bq25890_find_idx(ua, TBL_IILIM));
+	if (ret < 0) {
+		dev_err(bq->dev, "M1621 input: IINLIM write failed (%d)\n", ret);
+		return;
+	}
+	bq->m1621_vbus_type = type;
+	for (i = 0; i < ARRAY_SIZE(dump); i++)
+		if (regmap_read(bq->rmap, dump[i], &regs[i]) < 0)
+			regs[i] = -1;
+	ichgr = bq25890_field_read(bq, F_ICHGR);
+	vbus = bq25890_field_read(bq, F_VBUSV);
+	dev_info(bq->dev,
+		 "M1621 input: %s, input limit %u mA, charge current %u mA (REG00 0x%02x 02 0x%02x 04 0x%02x 0B 0x%02x 0C 0x%02x, IBAT %d mA, VBUS %d mV)\n",
+		 bq25890_vbus_names[type & 7], ua / 1000,
+		 bq25890_find_val(bq->init_data.ichg, TBL_ICHG) / 1000,
+		 regs[0], regs[1], regs[2], regs[3], regs[4],
+		 ichgr < 0 ? ichgr : ichgr * 50,
+		 vbus < 0 ? vbus : 2600 + vbus * 100);
+}
+
 static void bq25890_handle_state_change(struct bq25890_device *bq,
 					struct bq25890_state *new_state)
 {
@@ -662,6 +718,7 @@ static irqreturn_t bq25890_irq_handler_thread(int irq, void *private)
 		goto handled;
 
 	bq25890_m1621_temp_guard(bq, state.online);
+	bq25890_m1621_input(bq, state.online);
 	if (!bq25890_state_changed(bq, &state))
 		goto handled;
 
@@ -691,6 +748,7 @@ static void bq25890_state_work(struct work_struct *work)
 				    "Error polling charger state: %d\n", ret);
 	} else {
 		bq25890_m1621_temp_guard(bq, state.online);
+		bq25890_m1621_input(bq, state.online);
 		if (bq25890_state_changed(bq, &state)) {
 			bq25890_handle_state_change(bq, &state);
 
@@ -785,6 +843,13 @@ static int bq25890_hw_init(struct bq25890_device *bq)
 		ret = bq25890_field_write(bq, F_CONV_START, 1);
 		if (ret < 0)
 			return ret;
+		/* M1621: the reset above dropped the D+/D- result; detect again
+		 * so the input limit follows the source plugged in at boot */
+		if (bq->m1621_thermal_guard) {
+			ret = bq25890_field_write(bq, F_FORCE_DPM, 1);
+			if (ret < 0)
+				return ret;
+		}
 	}
 
 	return 0;
@@ -967,6 +1032,7 @@ static int bq25890_probe(struct i2c_client *client,
 	bq->dev = dev;
 	bq->m1621_thermal_guard =
 		of_machine_is_compatible("meizu,m1621");
+	bq->m1621_vbus_type = -1;
 	bq->temp_guard_state = BQ25890_TEMP_GUARD_UNKNOWN;
 
 	mutex_init(&bq->lock);

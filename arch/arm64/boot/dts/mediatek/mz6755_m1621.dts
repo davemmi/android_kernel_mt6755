@@ -192,8 +192,11 @@
 		reg = <0x6b>;
 		status = "okay";
 
-		/* Limits match measured stock settings and cap charging at 448 mA. */
-		ti,charge-current = <448000>;
+		/* Stock registers read 448 mA charge / 500 mA input on a USB
+		 * host port. The battery side is now 2048 mA (0.5 C of 4000 mAh);
+		 * the input limit starts at 500 mA and follows the D+/D- source
+		 * type (bq25890_m1621_input(): SDP 500 mA, CDP 1.5 A, DCP 2 A). */
+		ti,charge-current = <2048000>;
 		ti,input-current-limit = <500000>;
 		ti,battery-regulation-voltage = <4400000>;
 		ti,termination-current = <256000>;
