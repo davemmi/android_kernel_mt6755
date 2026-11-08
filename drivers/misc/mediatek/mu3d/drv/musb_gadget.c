@@ -395,16 +395,26 @@ void musb_g_giveback(struct musb_ep *ep,
 
 	req = to_musb_request(request);
 
-	/* A reset racing ep0 hands back a request that is not queued: its
-	 * list head is NULL (kzalloc'd, never queued) or already unlinked.
-	 * list_del() then wrote to 0x8 (Oops on USB replug, PC at
-	 * musb_g_giveback+0x70 from musb_g_ep0_giveback, after "g_reset
-	 * entered"). Such a request is not completed a second time. */
-	if (unlikely(!req->list.next || !req->list.prev ||
-		     list_empty(&req->list))) {
-		pr_warn_ratelimited("[FORGE_USB] %s: giveback of an unqueued request %p (next %p) skipped\n",
-				    ep->end_point.name, request, req->list.next);
-		return;
+	/* Hand back only a request that is on this endpoint's list, found by
+	 * address without touching the request: on a USB replug ep0 handed
+	 * back one that was never queued (list head NULL, write to 0x8) or
+	 * already freed (stale next 0x50, write to 0x58), both Oopses at
+	 * musb_g_giveback+0x70 after "g_reset entered". */
+	{
+		struct musb_request *it;
+		bool found = false;
+
+		list_for_each_entry(it, &ep->req_list, list) {
+			if (it == req) {
+				found = true;
+				break;
+			}
+		}
+		if (unlikely(!found)) {
+			pr_warn_ratelimited("[FORGE_USB] %s: giveback of a request %p not on the list skipped\n",
+					    ep->end_point.name, request);
+			return;
+		}
 	}
 
 	if (!ep->is_in && ep->current_epnum < FORGE_USB_NEP)

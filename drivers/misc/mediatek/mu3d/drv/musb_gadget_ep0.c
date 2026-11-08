@@ -1458,10 +1458,42 @@ cleanup:
 	return status;
 }
 
-static int musb_g_ep0_dequeue(struct usb_ep *ep, struct usb_request *req)
+/*
+ * The composite driver dequeues its ep0 request (cdev->req) before it
+ * frees it on unbind. With dequeue unsupported (-EINVAL) the request
+ * stayed on ep0's req_list after the free, and the next ep0 interrupt -
+ * a USB replug, "g_reset entered" - handed back freed memory: Oops in
+ * musb_g_giveback+0x70 (list_del through a stale next 0x50). Take it
+ * off the list and complete it with -ECONNRESET.
+ */
+static int musb_g_ep0_dequeue(struct usb_ep *e, struct usb_request *r)
 {
-	/* we just won't support this */
-	return -EINVAL;
+	struct musb_ep *ep;
+	struct musb *musb;
+	struct musb_request *req, *it;
+	unsigned long flags;
+	bool found = false;
+
+	if (!e || !r)
+		return -EINVAL;
+	ep = to_musb_ep(e);
+	musb = ep->musb;
+	req = to_musb_request(r);
+
+	spin_lock_irqsave(&musb->lock, flags);
+	list_for_each_entry(it, &ep->req_list, list) {
+		if (it == req) {
+			found = true;
+			break;
+		}
+	}
+	if (found) {
+		musb_g_giveback(ep, r, -ECONNRESET);
+		musb->ackpend = 0;
+		musb->ep0_state = MUSB_EP0_STAGE_IDLE;
+	}
+	spin_unlock_irqrestore(&musb->lock, flags);
+	return found ? 0 : -EINVAL;
 }
 
 static int musb_g_ep0_halt(struct usb_ep *e, int value)
