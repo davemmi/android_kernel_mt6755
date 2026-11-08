@@ -2071,7 +2071,27 @@ static int md_cd_set_dsp_mpu(struct ccci_modem *md, int is_loaded)
 		ccci_set_dsp_region_protection(md, is_loaded);
 	return 0;
 }
+/*
+ * m1621 bring-up: modem start (MD1 PMIC bucks VSRAM_MD/VMD1/VMODEM, MD1
+ * power domain, SPM srcclk) stays off until forge_md_allow_start=1, so the
+ * driver can first be checked for probe, LK info and /dev/ccci* alone.
+ */
+static bool forge_md_allow_start;
+module_param(forge_md_allow_start, bool, 0644);
+
+static int md_cd_start_gated(struct ccci_modem *md);
+
 static int md_cd_start(struct ccci_modem *md)
+{
+	if (!forge_md_allow_start) {
+		pr_err("[FORGE_CCCI] md%d start refused (forge_md_allow_start=0)\n",
+		       md->index + 1);
+		return -EPERM;
+	}
+	return md_cd_start_gated(md);
+}
+
+static int md_cd_start_gated(struct ccci_modem *md)
 {
 	struct md_cd_ctrl *md_ctrl = (struct md_cd_ctrl *)md->private_data;
 	char img_err_str[IMG_ERR_STR_LEN];

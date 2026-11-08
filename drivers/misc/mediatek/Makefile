@@ -97,6 +97,9 @@ obj-$(CONFIG_MTK_CCCI_DEVICES)	+=  ccci_util/
 obj-$(CONFIG_MTK_NET_CCMNI) +=  ccmni/
 ifeq ($(CONFIG_MACH_MT6735M),y)
 obj-$(CONFIG_MTK_ECCCI_DRIVER) +=  eccci1/
+else ifeq ($(CONFIG_MTK_PLATFORM),"mt6755")
+# MT6755: the 3.18 eccci platform code (eccci1/mt6755) fits the old core.
+obj-$(CONFIG_MTK_ECCCI_DRIVER) +=  eccci1/
 else
 obj-$(CONFIG_MTK_ECCCI_DRIVER) +=  eccci/
 endif
