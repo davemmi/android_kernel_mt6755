@@ -2076,8 +2076,7 @@ static int md_cd_set_dsp_mpu(struct ccci_modem *md, int is_loaded)
  * power domain, SPM srcclk) stays off until forge_md_allow_start=1, so the
  * driver can first be checked for probe, LK info and /dev/ccci* alone.
  */
-static bool forge_md_allow_start;
-module_param(forge_md_allow_start, bool, 0644);
+extern bool forge_md_allow_start;	/* ccci_fsm.c, module parameter */
 
 static int md_cd_start_gated(struct ccci_modem *md);
 
