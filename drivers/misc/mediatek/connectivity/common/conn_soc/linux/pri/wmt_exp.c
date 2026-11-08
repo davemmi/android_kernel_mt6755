@@ -489,6 +489,14 @@ MTK_WCN_BOOL mtk_wcn_set_connsys_power_off_flag(MTK_WCN_BOOL value)
 EXPORT_SYMBOL(mtk_wcn_set_connsys_power_off_flag);
 
 #ifdef MTK_WCN_WMT_STP_EXP_SYMBOL_ABSTRACT
+/* chip id / hw / fw version for the GPS and BT char devices: without it
+ * mnld's COMBO_IOC_GPS_IC_HW_VERSION/FW_VERSION got 0 ("ic_info_get_f cb
+ * is null") */
+static UINT32 _mtk_wcn_wmt_ic_info_get(ENUM_WMT_CHIPINFO_TYPE_T type)
+{
+	return wmt_lib_get_icinfo(type);
+}
+
 VOID mtk_wcn_wmt_exp_init(void)
 {
 	MTK_WCN_WMT_EXP_CB_INFO wmtExpCb = {
@@ -502,7 +510,8 @@ VOID mtk_wcn_wmt_exp_init(void)
 		.wmt_msgcb_unreg_cb = _mtk_wcn_wmt_msgcb_unreg,
 		.wmt_sdio_op_reg_cb = _mtk_wcn_stp_wmt_sdio_op_reg,
 		.wmt_sdio_host_awake_cb = _mtk_wcn_stp_wmt_sdio_host_awake,
-		.wmt_assert_cb = _mtk_wcn_wmt_assert
+		.wmt_assert_cb = _mtk_wcn_wmt_assert,
+		.wmt_ic_info_get_cb = _mtk_wcn_wmt_ic_info_get
 	};
 
 	mtk_wcn_wmt_exp_cb_reg(&wmtExpCb);
