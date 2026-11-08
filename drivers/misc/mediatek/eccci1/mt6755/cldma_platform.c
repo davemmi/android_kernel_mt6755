@@ -134,11 +134,16 @@ int md_cd_get_modem_hw_info(struct platform_device *dev_ptr, struct ccci_dev_cfg
 		hw_info->l1_rgu_base = L1_RGU_BASE;
 		hw_info->md_boot_slave_En = MD_BOOT_VECTOR_EN;
 #if !defined(CONFIG_MTK_CLKMGR)
+		/*
+		 * Neither the stock M5 nor the 4.9 mdcldma node has pinctrl
+		 * states and nothing else uses them; 4.9 returns an error
+		 * where 3.18 did not, so carry on without.
+		 */
 		mdcldma_pinctrl = devm_pinctrl_get(&dev_ptr->dev);
 		if (IS_ERR(mdcldma_pinctrl)) {
-			CCCI_ERROR_LOG(dev_cfg->index, TAG, "modem %d get mdcldma_pinctrl failed\n",
-							dev_cfg->index + 1);
-			return -1;
+			CCCI_NORMAL_LOG(dev_cfg->index, TAG, "modem %d: no mdcldma pinctrl (%ld), ignored\n",
+							dev_cfg->index + 1, PTR_ERR(mdcldma_pinctrl));
+			mdcldma_pinctrl = NULL;
 		}
 		clk_scp_sys_md1_main = devm_clk_get(&dev_ptr->dev, "scp-sys-md1-main");
 		if (IS_ERR(clk_scp_sys_md1_main)) {
