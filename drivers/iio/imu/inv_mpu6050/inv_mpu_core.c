@@ -812,7 +812,10 @@ static int inv_check_and_setup_chip(struct inv_mpu6050_state *st)
 	result = regmap_read(st->map, INV_MPU6050_REG_WHOAMI, &regval);
 	if (result)
 		return result;
-	if (regval != st->hw->whoami) {
+	/* ICM-20608-D (Meizu M5 Note) reports 0xAE; register map as -G. */
+	if (regval != st->hw->whoami &&
+	    !(st->chip_type == INV_ICM20608 &&
+	      regval == INV_ICM20608D_WHOAMI_VALUE)) {
 		dev_warn(regmap_get_device(st->map),
 				"whoami mismatch got %#02x expected %#02hhx for %s\n",
 				regval, st->hw->whoami, st->hw->name);

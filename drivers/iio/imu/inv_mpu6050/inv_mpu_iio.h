@@ -230,6 +230,7 @@ struct inv_mpu6050_state {
 #define INV_MPU6500_WHOAMI_VALUE		0x70
 #define INV_MPU9150_WHOAMI_VALUE		0x68
 #define INV_ICM20608_WHOAMI_VALUE		0xAF
+#define INV_ICM20608D_WHOAMI_VALUE		0xAE
 
 /* scan element definition */
 enum inv_mpu6050_scan {

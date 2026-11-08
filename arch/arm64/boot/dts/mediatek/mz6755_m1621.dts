@@ -187,6 +187,20 @@
 	alsps@60   { status = "disabled"; };
 	msensor@2e { status = "disabled"; };
 
+	/* ICM-20608-D (WHO_AM_I 0xAE) for the mainline inv_mpu6050 IIO driver.
+	 * Stock M5 DT: gyro EINT4 on GPIO4 (pull-down), not the M3's EINT17.
+	 * The driver requests the IRQ rising; the chip pulses INT high. Axis
+	 * remap (stock axis_map 1/0/2, all negated) is done in the sensors HAL. */
+	gyro@68 {
+		compatible = "invensense,icm20608";
+		reg = <0x68>;
+		interrupt-parent = <&eintc>;
+		interrupts = <4 IRQ_TYPE_EDGE_RISING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&icm20608_int_default>;
+		status = "okay";
+	};
+
 	swithing_charger@6b {
 		compatible = "ti,bq25892";
 		reg = <0x6b>;
@@ -222,14 +236,6 @@
 		reg = <0x0c>;
 		status = "okay";
 	};
-};
-
-/* ICM20608 INT = GPIO17/EINT17, rising, no debounce (stock
- * inv_mpu_ring.c); cust.dtsi carries the generic <4 IRQ_TYPE_LEVEL_HIGH>.
- * The inv_mpu driver maps this node via "mediatek, gyro-eint". */
-&gyro {
-	interrupts = <17 IRQ_TYPE_EDGE_RISING>;
-	debounce = <17 0>;
 };
 
 /* ALS INT = GPIO6/EINT6. pa122_setup_eint() looks up the "pin_cfg" state
@@ -837,4 +843,15 @@
 	interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_LOW>,
 		     <GIC_SPI 111 IRQ_TYPE_LEVEL_LOW>,
 		     <GIC_SPI 116 IRQ_TYPE_LEVEL_LOW>;
+};
+
+/* ICM-20608-D INT: GPIO4 as EINT4 input, pull-down (stock gyropincfg). */
+&pio {
+	icm20608_int_default: icm20608_int_default {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO4__FUNC_GPIO4>;
+			slew-rate = <0>;
+			bias-pull-down;
+		};
+	};
 };
