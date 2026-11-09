@@ -264,9 +264,10 @@ module_param_named(allow_msdc1, forge_pmic_sd, bool, 0644);
 /* M5 Note MD1 (eccci1/mt6755 md1_pmic_setting_on/off, MT6351 branch of the
  * 3.18 M3 kernel): VSRAM_MD, VMD1 and VMODEM bucks, EN / VSLEEP_EN /
  * VOSEL_CTRL and the stock VOSEL_ON codes only (VSRAM_MD 0x40 E1 1.0 V or
- * 0x50 E2 1.1 V, VMODEM 0x40 1.0 V). m1621 only; off by default, the modem
+ * 0x50 E2 1.1 V, VMODEM 0x40 1.0 V). m1621 only, on by default (allow_md1=0
+ * blocks the writes); the modem
  * start is gated separately (ccci.forge_md_allow_start). */
-static bool forge_pmic_md1;
+static bool forge_pmic_md1 = true;
 module_param_named(allow_md1, forge_pmic_md1, bool, 0644);
 
 struct forge_pmic_wl {

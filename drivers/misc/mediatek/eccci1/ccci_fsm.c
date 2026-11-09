@@ -180,12 +180,12 @@ static void ccci_routine_exception(struct ccci_fsm_ctl *ctl, struct ccci_fsm_com
 }
 
 /*
- * m1621 bring-up: modem start stays off until forge_md_allow_start=1.
+ * m1621: modem start, on by default; ccci.forge_md_allow_start=0 blocks it.
  * Refuse here, before the FSM leaves GATED: a failing ccci_md_start() is
  * handled as a boot handshake timeout whose register dump touches the
  * unpowered modem (NULL deref in ccci_util_mem_dump, boot_ccci2).
  */
-bool forge_md_allow_start;
+bool forge_md_allow_start = true;
 module_param(forge_md_allow_start, bool, 0644);
 
 static void ccci_routine_start(struct ccci_fsm_ctl *ctl, struct ccci_fsm_command *cmd)
