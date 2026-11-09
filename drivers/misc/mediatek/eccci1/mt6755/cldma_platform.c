@@ -52,8 +52,46 @@ static struct clk *clk_scp_sys_md1_main;
 #endif
 static struct pinctrl *mdcldma_pinctrl;
 void forge_md1_pmic_dump(const char *when);
-void __attribute__((weak)) clk_buf_set_by_flightmode(bool is_flightmode_on)
+/*
+ * m1621: base/power/mt6755/mt_clkbuf_ctl.c is not built, so this used to be
+ * an empty stub. On this RF-VCTCXO board the RF clock buffers (CONN, NFC,
+ * AUDIO = XO_AUDIO for the MT6351 codec) are switched by the modem over
+ * SPM-BSI, and SPM_MDBSI_CON bits 0..2 tell it which ones the AP needs.
+ * LK leaves 0: with MD1 running, system sounds came out as noise and the
+ * first playback after a while with the screen off hung the AP. Do what
+ * stock clk_buf_set_by_flightmode() does: modem on -> all three enabled
+ * (clk_buf_swctrl_modem_on); flight mode/modem off -> the value from boot.
+ */
+#define FORGE_SPM_MDBSI_CON	0x404
+extern void __iomem *spm_base;
+static u32 forge_mdbsi_boot;
+static bool forge_mdbsi_saved;
+static DEFINE_MUTEX(forge_mdbsi_lock);
+
+void clk_buf_set_by_flightmode(bool is_flightmode_on)
 {
+	u32 pre, val;
+
+	if (!spm_base)
+		return;
+	mutex_lock(&forge_mdbsi_lock);
+	pre = readl(spm_base + FORGE_SPM_MDBSI_CON);
+	if (!forge_mdbsi_saved) {
+		forge_mdbsi_boot = pre;
+		forge_mdbsi_saved = true;
+	}
+	if (is_flightmode_on)
+		val = (pre & ~0x7) | (forge_mdbsi_boot & 0x7);
+	else
+		val = pre | 0x7;
+	if (val != pre) {
+		mt_reg_sync_writel(val, spm_base + FORGE_SPM_MDBSI_CON);
+		udelay(2);
+	}
+	pr_err("[FORGE_CCCI] clkbuf flightmode=%d MDBSI_CON 0x%x -> 0x%x (boot 0x%x)\n",
+	       is_flightmode_on, pre, readl(spm_base + FORGE_SPM_MDBSI_CON),
+	       forge_mdbsi_boot);
+	mutex_unlock(&forge_mdbsi_lock);
 }
 
 #define TAG "mcd"
