@@ -89,10 +89,15 @@ static CLK_BUF_SWCTRL_STATUS_T forge_swctrl[CLKBUF_NUM] = {
 static CLK_BUF_SWCTRL_STATUS_T forge_swctrl_modem_on[CLKBUF_NUM] = {
 	CLK_BUF_SW_ENABLE, CLK_BUF_SW_ENABLE,
 	CLK_BUF_SW_ENABLE, CLK_BUF_SW_ENABLE };
-/* stock starts with flight mode off: until MD1 has run, clk_buf_ctrl only
- * records and the SPM register keeps the LK value */
+/* stock starts with flight mode off: until RIL first enters flight mode,
+ * clk_buf_ctrl only records and the SPM register keeps the LK value (0),
+ * also across the first MD1 power-on (stock log: "0->0"). The first SIM
+ * test with an early modem-on write (0x6/0x7 before MD1 boots) left RIL's
+ * AT+EFUN unanswered; forge_clkbuf_first_md_on=1 restores that write. */
 static bool forge_flightmode;
 static bool forge_md_on_written;
+static bool forge_clkbuf_first_md_on;
+module_param(forge_clkbuf_first_md_on, bool, 0644);
 static bool forge_clkbuf_inited;
 static unsigned int forge_afcdac = 0x2A80008;	/* afc_default = 4096 */
 static bool forge_afcdac_updated;
@@ -193,7 +198,8 @@ void clk_buf_set_by_flightmode(bool is_flightmode_on)
 	       forge_flightmode, is_flightmode_on);
 	if (forge_flightmode == is_flightmode_on) {
 		/* first MD1 power-on: stock skips this (no change), LK leaves 0 */
-		if (!is_flightmode_on && !forge_md_on_written) {
+		if (!is_flightmode_on && !forge_md_on_written &&
+		    forge_clkbuf_first_md_on) {
 			forge_spm_clk_buf_ctrl(forge_swctrl_modem_on, "first modem on");
 			forge_md_on_written = true;
 		}
