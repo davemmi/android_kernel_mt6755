@@ -18,6 +18,9 @@
 #include <linux/of_fdt.h>
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
+#include <linux/delay.h>
+#include <linux/mutex.h>
+#include <linux/workqueue.h>
 
 #include "ccci_config.h"
 #if defined(CONFIG_MTK_CLKMGR)
@@ -53,45 +56,221 @@ static struct clk *clk_scp_sys_md1_main;
 static struct pinctrl *mdcldma_pinctrl;
 void forge_md1_pmic_dump(const char *when);
 /*
- * m1621: base/power/mt6755/mt_clkbuf_ctl.c is not built, so this used to be
- * an empty stub. On this RF-VCTCXO board the RF clock buffers (CONN, NFC,
- * AUDIO = XO_AUDIO for the MT6351 codec) are switched by the modem over
- * SPM-BSI, and SPM_MDBSI_CON bits 0..2 tell it which ones the AP needs.
- * LK leaves 0: with MD1 running, system sounds came out as noise and the
- * first playback after a while with the screen off hung the AP. Do what
- * stock clk_buf_set_by_flightmode() does: modem on -> all three enabled
- * (clk_buf_swctrl_modem_on); flight mode/modem off -> the value from boot.
+ * m1621: base/power/mt6755/mt_clkbuf_ctl.c is not built. This is the part of
+ * it this board needs (stock M5 Note kernel log: "clkbuf is from RF",
+ * DT clkbuf-config <2 0 1 1>, driving current <2 2 2 2>): the 26 MHz RF
+ * clock buffers (BB_MD = HW, CONN = off, NFC = SW, AUDIO = SW; AUDIO is
+ * XO_AUDIO for the MT6351 codec) are switched by the modem, or by the SPM
+ * over BSI while MD1 is in flight mode.
+ *
+ * - modem on: SPM_MDBSI_CON gets the modem-on mask, and the RF_CLK_BUF RPC
+ *   tells MD1 the same mask (clk_buf_get_swctrl_status). Before, the RPC
+ *   sent an uninitialised stack array.
+ * - flight mode (RIL EFUN=0 -> soft_power_off, MD1 stays powered): after
+ *   2 s the SPM gets the AP's own mask, where AUDIO follows the audio
+ *   driver's clk_buf_ctrl(CLK_BUF_AUDIO, on). Before, clk_buf_ctrl was an
+ *   empty weak stub and flight mode wrote 0, so XO_AUDIO was off during
+ *   playback: noise instead of sound, then the AP hung (WDT).
+ * - SPM_BSI_EN_SR holds the AFC DAC word the SPM sends with BSI: default
+ *   0x2A80008 at init (stock clk_buf_init), then the modem's value once
+ *   (clk_buf_save_afc_val). Before, it was never written.
  */
 #define FORGE_SPM_MDBSI_CON	0x404
+#define FORGE_SPM_BSI_EN_SR	0x414
 extern void __iomem *spm_base;
-static u32 forge_mdbsi_boot;
-static bool forge_mdbsi_saved;
-static DEFINE_MUTEX(forge_mdbsi_lock);
 
-void clk_buf_set_by_flightmode(bool is_flightmode_on)
+static u32 forge_clkbuf_status[CLKBUF_NUM] = {
+	CLOCK_BUFFER_HW_CONTROL, CLOCK_BUFFER_DISABLE,
+	CLOCK_BUFFER_SW_CONTROL, CLOCK_BUFFER_SW_CONTROL };
+static u32 forge_clkbuf_drv[CLKBUF_NUM] = { 2, 2, 2, 2 };
+static CLK_BUF_SWCTRL_STATUS_T forge_swctrl[CLKBUF_NUM] = {
+	CLK_BUF_SW_ENABLE, CLK_BUF_SW_ENABLE,
+	CLK_BUF_SW_ENABLE, CLK_BUF_SW_DISABLE };
+static CLK_BUF_SWCTRL_STATUS_T forge_swctrl_modem_on[CLKBUF_NUM] = {
+	CLK_BUF_SW_ENABLE, CLK_BUF_SW_ENABLE,
+	CLK_BUF_SW_ENABLE, CLK_BUF_SW_ENABLE };
+/* stock starts with flight mode off: until MD1 has run, clk_buf_ctrl only
+ * records and the SPM register keeps the LK value */
+static bool forge_flightmode;
+static bool forge_md_on_written;
+static bool forge_clkbuf_inited;
+static unsigned int forge_afcdac = 0x2A80008;	/* afc_default = 4096 */
+static bool forge_afcdac_updated;
+static DEFINE_MUTEX(forge_clkbuf_lock);
+static void forge_clkbuf_worker(struct work_struct *work);
+static DECLARE_DELAYED_WORK(forge_clkbuf_work, forge_clkbuf_worker);
+
+/* stock spm_clk_buf_ctrl: MDBSI_CON bits 0..2 = buffers 2..4 */
+static void forge_spm_clk_buf_ctrl(CLK_BUF_SWCTRL_STATUS_T *status,
+				   const char *why)
 {
 	u32 pre, val;
+	int i;
 
 	if (!spm_base)
 		return;
-	mutex_lock(&forge_mdbsi_lock);
 	pre = readl(spm_base + FORGE_SPM_MDBSI_CON);
-	if (!forge_mdbsi_saved) {
-		forge_mdbsi_boot = pre;
-		forge_mdbsi_saved = true;
-	}
-	if (is_flightmode_on)
-		val = (pre & ~0x7) | (forge_mdbsi_boot & 0x7);
-	else
-		val = pre | 0x7;
+	val = pre & ~0x7;
+	for (i = 1; i < CLKBUF_NUM; i++)
+		val |= (status[i] ? 1 : 0) << (i - 1);
 	if (val != pre) {
 		mt_reg_sync_writel(val, spm_base + FORGE_SPM_MDBSI_CON);
 		udelay(2);
 	}
-	pr_err("[FORGE_CCCI] clkbuf flightmode=%d MDBSI_CON 0x%x -> 0x%x (boot 0x%x)\n",
-	       is_flightmode_on, pre, readl(spm_base + FORGE_SPM_MDBSI_CON),
-	       forge_mdbsi_boot);
-	mutex_unlock(&forge_mdbsi_lock);
+	pr_err("[FORGE_CLKBUF] %s: flightmode=%d MDBSI_CON 0x%x -> 0x%x\n",
+	       why, forge_flightmode, pre,
+	       readl(spm_base + FORGE_SPM_MDBSI_CON));
+}
+
+/* stock clk_buf_init (RF/VCTCXO branch); caller holds the lock */
+static void forge_clkbuf_init_locked(void)
+{
+	struct device_node *node;
+	u32 vals[CLKBUF_NUM];
+	int i;
+
+	if (forge_clkbuf_inited)
+		return;
+	node = of_find_compatible_node(NULL, NULL, "mediatek,rf_clock_buffer");
+	if (node) {
+		if (!of_property_read_u32_array(node, "mediatek,clkbuf-config",
+						vals, CLKBUF_NUM))
+			memcpy(forge_clkbuf_status, vals, sizeof(vals));
+		if (!of_property_read_u32_array(node,
+				"mediatek,clkbuf-driving-current", vals, CLKBUF_NUM))
+			memcpy(forge_clkbuf_drv, vals, sizeof(vals));
+		of_node_put(node);
+	}
+	/* clk_buf_init_rf_swctrl */
+	for (i = 0; i < CLKBUF_NUM; i++)
+		if (forge_clkbuf_status[i] == CLOCK_BUFFER_DISABLE) {
+			forge_swctrl[i] = CLK_BUF_SW_DISABLE;
+			forge_swctrl_modem_on[i] = CLK_BUF_SW_DISABLE;
+		}
+	if (spm_base) {
+		u32 pre = readl(spm_base + FORGE_SPM_BSI_EN_SR);
+
+		mt_reg_sync_writel(forge_afcdac, spm_base + FORGE_SPM_BSI_EN_SR);
+		pr_err("[FORGE_CLKBUF] init: config %u %u %u %u drv %u %u %u %u, BSI_EN_SR 0x%x -> 0x%x, MDBSI_CON 0x%x\n",
+		       forge_clkbuf_status[0], forge_clkbuf_status[1],
+		       forge_clkbuf_status[2], forge_clkbuf_status[3],
+		       forge_clkbuf_drv[0], forge_clkbuf_drv[1],
+		       forge_clkbuf_drv[2], forge_clkbuf_drv[3], pre,
+		       readl(spm_base + FORGE_SPM_BSI_EN_SR),
+		       readl(spm_base + FORGE_SPM_MDBSI_CON));
+	}
+	forge_clkbuf_inited = true;
+}
+
+static int __init forge_clkbuf_late_init(void)
+{
+	mutex_lock(&forge_clkbuf_lock);
+	forge_clkbuf_init_locked();
+	mutex_unlock(&forge_clkbuf_lock);
+	return 0;
+}
+late_initcall(forge_clkbuf_late_init);
+
+static void forge_clkbuf_worker(struct work_struct *work)
+{
+	mutex_lock(&forge_clkbuf_lock);
+	if (forge_flightmode)
+		forge_spm_clk_buf_ctrl(forge_swctrl, "flightmode delayed");
+	mutex_unlock(&forge_clkbuf_lock);
+}
+
+bool is_clk_buf_under_flightmode(void)
+{
+	return forge_flightmode;
+}
+
+/* for ccci: MD1 power-on/off and RIL flight mode (soft power on/off) */
+void clk_buf_set_by_flightmode(bool is_flightmode_on)
+{
+	mutex_lock(&forge_clkbuf_lock);
+	forge_clkbuf_init_locked();
+	pr_err("[FORGE_CLKBUF] set_by_flightmode %d -> %d\n",
+	       forge_flightmode, is_flightmode_on);
+	if (forge_flightmode == is_flightmode_on) {
+		/* first MD1 power-on: stock skips this (no change), LK leaves 0 */
+		if (!is_flightmode_on && !forge_md_on_written) {
+			forge_spm_clk_buf_ctrl(forge_swctrl_modem_on, "first modem on");
+			forge_md_on_written = true;
+		}
+		mutex_unlock(&forge_clkbuf_lock);
+		return;
+	}
+	forge_flightmode = is_flightmode_on;
+	if (forge_flightmode) {
+		schedule_delayed_work(&forge_clkbuf_work, msecs_to_jiffies(2000));
+	} else {
+		cancel_delayed_work(&forge_clkbuf_work);
+		forge_spm_clk_buf_ctrl(forge_swctrl_modem_on, "modem on");
+		forge_md_on_written = true;
+	}
+	mutex_unlock(&forge_clkbuf_lock);
+}
+
+/* audio codec (CLK_BUF_AUDIO), GPS, consys, NFC */
+bool clk_buf_ctrl(enum clk_buf_id id, bool onoff)
+{
+	if (id >= CLK_BUF_INVALID)
+		return false;
+	if (forge_clkbuf_status[id] == CLOCK_BUFFER_HW_CONTROL)
+		return false;
+	mutex_lock(&forge_clkbuf_lock);
+	forge_clkbuf_init_locked();
+	if (forge_swctrl[id] != (onoff ? CLK_BUF_SW_ENABLE : CLK_BUF_SW_DISABLE))
+		pr_info("[FORGE_CLKBUF] clk_buf_ctrl(%d,%d) flightmode=%d\n",
+			id, onoff, forge_flightmode);
+	forge_swctrl[id] = onoff ? CLK_BUF_SW_ENABLE : CLK_BUF_SW_DISABLE;
+	if (forge_flightmode)
+		forge_spm_clk_buf_ctrl(forge_swctrl, "clk_buf_ctrl");
+	mutex_unlock(&forge_clkbuf_lock);
+	return true;
+}
+
+/* for ccci RPC IPC_RPC_GET_RF_CLK_BUF: what MD1 may switch */
+void clk_buf_get_swctrl_status(CLK_BUF_SWCTRL_STATUS_T *st)
+{
+	int i;
+
+	mutex_lock(&forge_clkbuf_lock);
+	forge_clkbuf_init_locked();
+	for (i = 0; i < CLKBUF_NUM; i++)
+		st[i] = forge_flightmode ? forge_swctrl[i] :
+					   forge_swctrl_modem_on[i];
+	pr_err("[FORGE_CLKBUF] RPC swctrl %d %d %d %d (flightmode=%d)\n",
+	       st[0], st[1], st[2], st[3], forge_flightmode);
+	mutex_unlock(&forge_clkbuf_lock);
+}
+
+void clk_buf_get_rf_drv_curr(void *rf_drv_curr)
+{
+	unsigned int *drv = rf_drv_curr;
+	int i;
+
+	mutex_lock(&forge_clkbuf_lock);
+	forge_clkbuf_init_locked();
+	for (i = 0; i < CLKBUF_NUM; i++)
+		drv[i] = forge_clkbuf_drv[i];
+	mutex_unlock(&forge_clkbuf_lock);
+}
+
+/* for ccci: AFC DAC word from MD1, written to the SPM once */
+void clk_buf_save_afc_val(unsigned int afcdac)
+{
+	if (!spm_base)
+		return;
+	mutex_lock(&forge_clkbuf_lock);
+	forge_afcdac = afcdac;
+	if (!forge_afcdac_updated) {
+		mt_reg_sync_writel(forge_afcdac, spm_base + FORGE_SPM_BSI_EN_SR);
+		forge_afcdac_updated = true;
+	}
+	pr_err("[FORGE_CLKBUF] afcdac 0x%x, BSI_EN_SR 0x%x\n", afcdac,
+	       readl(spm_base + FORGE_SPM_BSI_EN_SR));
+	mutex_unlock(&forge_clkbuf_lock);
 }
 
 #define TAG "mcd"
