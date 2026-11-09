@@ -182,7 +182,7 @@ int inv_mpu6050_set_power_itg(struct inv_mpu6050_state *st, bool power_on)
 	int result = 0;
 
 	if (power_on) {
-		/* Already under indio-dev->mlock mutex */
+		/* Already under st->lock */
 		if (!st->powerup_count)
 			result = regmap_write(st->map, st->reg->pwr_mgmt_1, 0);
 		if (!result)
@@ -324,7 +324,7 @@ inv_mpu6050_read_raw(struct iio_dev *indio_dev,
 
 		ret = IIO_VAL_INT;
 		result = 0;
-		mutex_lock(&indio_dev->mlock);
+		mutex_lock(&st->lock);
 		if (!st->chip_config.enable) {
 			result = inv_mpu6050_set_power_itg(st, true);
 			if (result)
@@ -381,7 +381,7 @@ inv_mpu6050_read_raw(struct iio_dev *indio_dev,
 error_read_raw:
 		if (!st->chip_config.enable)
 			result |= inv_mpu6050_set_power_itg(st, false);
-		mutex_unlock(&indio_dev->mlock);
+		mutex_unlock(&st->lock);
 		if (result)
 			return result;
 
@@ -500,7 +500,7 @@ static int inv_mpu6050_write_raw(struct iio_dev *indio_dev,
 	struct inv_mpu6050_state  *st = iio_priv(indio_dev);
 	int result;
 
-	mutex_lock(&indio_dev->mlock);
+	mutex_lock(&st->lock);
 	/*
 	 * we should only update scale when the chip is disabled, i.e.
 	 * not running
@@ -549,7 +549,7 @@ static int inv_mpu6050_write_raw(struct iio_dev *indio_dev,
 
 error_write_raw:
 	result |= inv_mpu6050_set_power_itg(st, false);
-	mutex_unlock(&indio_dev->mlock);
+	mutex_unlock(&st->lock);
 
 	return result;
 }
@@ -608,7 +608,7 @@ inv_mpu6050_fifo_rate_store(struct device *dev, struct device_attribute *attr,
 	if (fifo_rate == st->chip_config.fifo_rate)
 		return count;
 
-	mutex_lock(&indio_dev->mlock);
+	mutex_lock(&st->lock);
 	if (st->chip_config.enable) {
 		result = -EBUSY;
 		goto fifo_rate_fail;
@@ -629,7 +629,7 @@ inv_mpu6050_fifo_rate_store(struct device *dev, struct device_attribute *attr,
 
 fifo_rate_fail:
 	result |= inv_mpu6050_set_power_itg(st, false);
-	mutex_unlock(&indio_dev->mlock);
+	mutex_unlock(&st->lock);
 	if (result)
 		return result;
 
@@ -927,6 +927,7 @@ int inv_mpu_core_probe(struct regmap *regmap, int irq, const char *name,
 
 	INIT_KFIFO(st->timestamps);
 	spin_lock_init(&st->time_stamp_lock);
+	mutex_init(&st->lock);
 	result = iio_device_register(indio_dev);
 	if (result) {
 		dev_err(dev, "IIO register fail %d\n", result);

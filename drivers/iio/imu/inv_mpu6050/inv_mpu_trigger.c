@@ -39,7 +39,7 @@ static void inv_scan_query(struct iio_dev *indio_dev)
  *  @indio_dev:	Device driver instance.
  *  @enable: enable/disable
  */
-static int inv_mpu6050_set_enable(struct iio_dev *indio_dev, bool enable)
+static int __inv_mpu6050_set_enable(struct iio_dev *indio_dev, bool enable)
 {
 	struct inv_mpu6050_state *st = iio_priv(indio_dev);
 	int result;
@@ -93,6 +93,17 @@ static int inv_mpu6050_set_enable(struct iio_dev *indio_dev, bool enable)
 	st->chip_config.enable = enable;
 
 	return 0;
+}
+
+static int inv_mpu6050_set_enable(struct iio_dev *indio_dev, bool enable)
+{
+	struct inv_mpu6050_state *st = iio_priv(indio_dev);
+	int result;
+
+	mutex_lock(&st->lock);
+	result = __inv_mpu6050_set_enable(indio_dev, enable);
+	mutex_unlock(&st->lock);
+	return result;
 }
 
 /**
