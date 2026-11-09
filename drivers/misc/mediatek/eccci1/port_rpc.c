@@ -898,7 +898,7 @@ static void ccci_rpc_work_helper(struct ccci_port *port, struct rpc_pkt *pkt,
 		{
 			u16 count = 0;
 			struct ccci_rpc_clkbuf_result *clkbuf;
-			CLK_BUF_SWCTRL_STATUS_T swctrl_status[CLKBUF_MAX_COUNT];
+			CLK_BUF_SWCTRL_STATUS_T swctrl_status[CLKBUF_MAX_COUNT] = {0};
 #ifdef MD_UMOLY_EE_SUPPORT
 			struct ccci_rpc_clkbuf_input *clkinput;
 			u32 AfcDac;
@@ -985,7 +985,7 @@ static void ccci_rpc_work_helper(struct ccci_port *port, struct rpc_pkt *pkt,
 				clkbuf->ClkBuf_Driving[1] = vals_drv[1];
 				clkbuf->ClkBuf_Driving[2] = vals_drv[2];
 				clkbuf->ClkBuf_Driving[3] = vals_drv[3];
-				CCCI_INF_MSG(md_id, RPC, "RF_CLK_BUF*_DRIVING_CURR %d, %d, %d, %d, AfcDac: %d\n",
+				CCCI_NORMAL_LOG(md_id, RPC, "RF_CLK_BUF*_DRIVING_CURR %d, %d, %d, %d, AfcDac: %d\n",
 					vals_drv[0], vals_drv[1], vals_drv[2], vals_drv[3], AfcDac);
 #endif
 			}
