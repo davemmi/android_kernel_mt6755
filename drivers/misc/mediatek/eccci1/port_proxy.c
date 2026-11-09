@@ -1063,7 +1063,13 @@ int port_proxy_start_md(struct port_proxy *proxy_p)
 	int ret = 0;
 
 	proxy_p->mdlog_dump_done = 0;
-	ret = ccci_fsm_append_command(proxy_p->md_obj, CCCI_COMMAND_START, 0);
+	/*
+	 * Wait for the boot handshake as the 3.18 driver did: the N
+	 * ccci_mdinit reads the modem state right after the start request
+	 * and gave up on "modem state 0" while MD1 reached READY 1.3 s later.
+	 */
+	ret = ccci_fsm_append_command(proxy_p->md_obj, CCCI_COMMAND_START,
+				      CCCI_CMD_FLAG_WAIT_FOR_COMPLETE);
 	return ret;
 }
 
