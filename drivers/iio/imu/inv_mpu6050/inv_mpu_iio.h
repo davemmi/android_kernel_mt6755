@@ -133,6 +133,10 @@ struct inv_mpu6050_state {
 	const struct inv_mpu6050_hw *hw;
 	enum   inv_devices chip_type;
 	spinlock_t time_stamp_lock;
+	/* chip state and register access; not indio_dev->mlock, which the
+	 * IIO core holds across buffer disable -> free_irq ->
+	 * synchronize_irq while the FIFO IRQ thread would wait for it */
+	struct mutex lock;
 	struct i2c_mux_core *muxc;
 	struct i2c_client *mux_client;
 	unsigned int powerup_count;
