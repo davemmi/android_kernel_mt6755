@@ -3315,6 +3315,7 @@ static int wext_set_country(IN struct net_device *prNetDev, IN struct iwreq *iwr
 	WLAN_STATUS rStatus;
 	UINT_32 u4BufLen;
 	UINT_8 aucCountry[2];
+	UINT_8 aucCmd[10];
 
 	ASSERT(prNetDev);
 
@@ -3325,8 +3326,16 @@ static int wext_set_country(IN struct net_device *prNetDev, IN struct iwreq *iwr
 		return -EINVAL;
 	prGlueInfo = *((P_GLUE_INFO_T *) netdev_priv(prNetDev));
 
-	aucCountry[0] = *((PUINT_8) iwr->u.data.pointer + 8);
-	aucCountry[1] = *((PUINT_8) iwr->u.data.pointer + 9);
+	/*
+	 * iwr->u.data.pointer is a user pointer: reading it directly oopsed
+	 * on arm64 4.9 ("Accessing user space memory outside uaccess.h
+	 * routines") as soon as the SIM's MCC made Android set the Wi-Fi
+	 * country code (m1621, boot_ccci7).
+	 */
+	if (copy_from_user(aucCmd, iwr->u.data.pointer, sizeof(aucCmd)))
+		return -EFAULT;
+	aucCountry[0] = aucCmd[8];
+	aucCountry[1] = aucCmd[9];
 
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetCountryCode, &aucCountry[0], 2, FALSE, FALSE, TRUE, FALSE, &u4BufLen);
 	wlanUpdateChannelTable(prGlueInfo);
